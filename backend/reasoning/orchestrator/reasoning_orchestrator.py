@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 import time
 import uuid
 from collections import Counter
@@ -35,6 +36,7 @@ from backend.core.domain.reasoning_result import (
     OppositionAssessment,
     ScientificAuditReport,
 )
+from backend.core.value_objects.evidence_summary import EvidenceSummary
 from backend.core.domain.claim import Claim
 from backend.core.domain.claim_graph import ClaimGraph
 from backend.core.domain.contradiction import Contradiction
@@ -42,6 +44,8 @@ from backend.core.domain.contradiction_summary import ContradictionSummary
 from backend.core.enums.causal_grounding import CausalGrounding
 from backend.core.enums.recommendation import RecommendationStatus
 from backend.core.enums.predicate_type import PredicateType
+from backend.core.enums.evidence_polarity import EvidencePolarity
+from backend.reasoning.directional.evidence_polarity_classifier import EvidencePolarityClassifier
 from backend.core.enums.evidence_type import EvidenceType
 from backend.core.enums.trial_outcome import TrialOutcomeStatus
 from backend.core.value_objects.therapeutic_direction_evidence import (
@@ -417,6 +421,7 @@ class ReasoningOrchestrator:
             claim_extraction_method=claim_extraction_method,
             opposition_assessment=opposition_assessment,
             contradiction_summary=contradiction_summary,
+            evidence_summary=audit_report.evidence_summary,
         )
 
         logger.info(
@@ -492,10 +497,21 @@ class ReasoningOrchestrator:
             for ev in selected
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        claims: list[Claim] = []
+        raw_claims: list[Claim] = []
         for res in results:
             if isinstance(res, list):
-                claims.extend(res)
+                raw_claims.extend(res)
+
+        target_names = [getattr(t, "name", "") or getattr(t, "gene_symbol", "") for t in package.targets]
+        claims: list[Claim] = []
+        for c in raw_claims:
+            classified = EvidencePolarityClassifier.classify_claim(
+                c,
+                drug_name=package.drug.name,
+                disease_name=package.disease.name,
+                known_targets=target_names,
+            )
+            claims.append(classified)
         return claims
 
     @staticmethod
@@ -655,15 +671,24 @@ class ReasoningOrchestrator:
         Score formula: SS = 1 - exp(-k * quality_weighted_sum)
         where quality_weighted_sum = Σ min(erw, erw_ceiling_for_type)
         """
-        supporting_claims = [
-            c for c in claims
-            if c.predicate in (
-                PredicateType.ACTIVATES,
-                PredicateType.INHIBITS,
-                PredicateType.BINDS,
-                PredicateType.PREVENTS,
-            )
-        ]
+        target_names = [getattr(t, "name", "") or getattr(t, "gene_symbol", "") for t in package.targets]
+        classified_claims: list[Claim] = []
+        for c in claims:
+            pol = getattr(c, "polarity", EvidencePolarity.UNKNOWN)
+            ts = getattr(c, "therapeutic_support", False)
+            if pol == EvidencePolarity.UNKNOWN and not ts:
+                classified_claims.append(
+                    EvidencePolarityClassifier.classify_claim(
+                        c,
+                        drug_name=package.drug.name,
+                        disease_name=package.disease.name,
+                        known_targets=target_names,
+                    )
+                )
+            else:
+                classified_claims.append(c)
+
+        supporting_claims = [c for c in classified_claims if getattr(c, "therapeutic_support", False) is True]
 
         if not supporting_claims and not package.evidence_records:
             if prior_ctx.evidence_boost > 0:
@@ -700,7 +725,11 @@ class ReasoningOrchestrator:
         excluded_nontherapeutic_count = 0
 
         for ev in package.evidence_records:
-            eligible, _reason = is_therapeutically_eligible_evidence(ev)
+            eligible, _reason = is_therapeutically_eligible_evidence(
+                ev,
+                drug_name=package.drug.name,
+                disease_name=package.disease.name,
+            )
             if not eligible:
                 excluded_nontherapeutic_count += 1
                 continue
@@ -719,9 +748,16 @@ class ReasoningOrchestrator:
                 type_buckets["review"].append(capped_erw)
 
         for c in supporting_claims:
-            capped = min(c.erw.value, 0.80)
+            erw_obj = getattr(c, "erw", None)
+            erw_val = getattr(erw_obj, "value", erw_obj) if erw_obj is not None else 0.80
+            if not isinstance(erw_val, (int, float)):
+                try:
+                    erw_val = float(erw_val)
+                except Exception:
+                    erw_val = 0.80
+            capped = min(erw_val, 0.80)
             quality_weighted_sum += capped
-            raw_weighted_sum += c.erw.value
+            raw_weighted_sum += erw_val
             type_buckets["claim"].append(capped)
 
         count = len(supporting_claims) + len(package.evidence_records) - excluded_nontherapeutic_count
@@ -769,8 +805,11 @@ class ReasoningOrchestrator:
 
         breakdown_text = "; ".join(breakdown_parts) if breakdown_parts else "No breakdown available."
 
+        eval_records_count = len(package.evidence_records) - excluded_nontherapeutic_count
+        eval_claims_count = len(supporting_claims)
         rationale = (
-            f"Support Score (SS) from {count} evidence records.\n"
+            f"Support Score: {score:.3f} {level} — {count} evaluated support signals "
+            f"({eval_records_count} retrieved evidence records + {eval_claims_count} extracted claims).\n"
             f"Breakdown: {breakdown_text}\n"
             f"Formula: SS = 1 - exp(-0.12 × quality_weighted_sum). "
             f"Quality-weighted sum = {quality_weighted_sum:.2f} "
@@ -950,6 +989,14 @@ class ReasoningOrchestrator:
         serialized_candidates = [c.to_dict() for c in candidates]
 
         # Rationale
+        cand_pathways = set()
+        for cm in candidates:
+            for h in getattr(cm, "hops", []):
+                for node_str in (getattr(h, "from_node", ""), getattr(h, "to_node", "")):
+                    if node_str.startswith("Pathway:"):
+                        cand_pathways.add(node_str.split("Pathway:", 1)[1].strip())
+        cand_mech_pathway_count = len(cand_pathways) if cand_pathways else (1 if candidates else 0)
+
         candidates_note = f"Discovered {len(candidates)} candidate biological mechanism(s). "
         best_level = candidates[0].support_level if candidates else "NONE"
         lit_note = f"Literature grounding: {lit_grounding} ({lit_claims_count} claim(s)). "
@@ -957,6 +1004,7 @@ class ReasoningOrchestrator:
         rationale = (
             f"Mechanistic Score (MS) derived from candidate mechanism quality. "
             f"Best candidate support level: {best_level}. "
+            f"Candidate Mechanism Pathways: {cand_mech_pathway_count} (Annotated Reactome Pathways: {pathway_count}). "
             f"{candidates_note}{lit_note}"
             f"Final MS = {score:.3f} ({level})."
         )
@@ -1332,8 +1380,18 @@ class ReasoningOrchestrator:
         # that the drug is contraindicated for the queried disease.
         harmful_claims = []
         for c in (claims or []):
+            if getattr(c, "therapeutic_support", False) or getattr(c, "predicate", None) == PredicateType.PREVENTS:
+                continue
             text = (getattr(c, "raw_text", "") or f"{c.subject} {c.predicate.value} {c.object}").lower()
-            if (
+            if bool(re.search(r"\b(?:lower|reduced?|decrease[ds]?|prevent(?:s|ed|ing|ion)?|less|minimal)\s+(?:risk\s+of\s+)?exacerbat", text)):
+                continue
+            is_harm_signal = (
+                getattr(c, "adverse_event_flag", False)
+                or getattr(c, "polarity", None) in (EvidencePolarity.ADVERSE_EVENT, EvidencePolarity.ETIOLOGIC_ASSOCIATION, EvidencePolarity.SAFETY_SIGNAL)
+                or "contraindicat" in text
+                or "causes heart failure" in text
+            )
+            if is_harm_signal and (
                 "contraindicat" in text
                 or "exacerbat" in text
                 or "worsen" in text
@@ -1400,13 +1458,14 @@ class ReasoningOrchestrator:
             f"(grade penalty: {0.0 if safety_profile.has_boxed_warning else grade_penalty:.1f})"
         )
 
+        risk_obs_label = "NONE DETECTED" if (score == 0.0 and level in ("NONE", "LOW")) else level
         rationale = (
             f"Risk Score (RS) computed from clinically significant safety signals.\n"
             f"Trial analysis: {len(clinically_significant_failures)} clinically significant failure(s); "
             f"{len(administrative_terminated + covid_terminated)} administrative/external termination(s) excluded.\n"
             f"Risk factors: {'; '.join(risk_factors) if risk_factors else 'None identified'}.\n"
             f"Formula: RS = 1 - exp(-0.30 x raw_risk_burden). "
-            f"Raw burden = {raw_risk:.2f}. Final RS = {score:.3f} ({level})."
+            f"Raw burden = {raw_risk:.2f}. Risk Score: {score:.3f} ({risk_obs_label})."
         )
 
         return RiskAssessment(
@@ -1494,6 +1553,7 @@ class ReasoningOrchestrator:
         contradictions: list[Contradiction],
         package: RetrievalPackage,
         opposition: OppositionAssessment | None = None,
+        **kwargs: Any,
     ) -> list[str]:
         """Build evidence checklist for transparent recommendation display.
 
@@ -1506,6 +1566,7 @@ class ReasoningOrchestrator:
             contradictions=contradictions,
             package=package,
             opposition=opposition,
+            **kwargs,
         )
 
     # ─────────────────────────────────────────────
@@ -1622,7 +1683,7 @@ class ReasoningOrchestrator:
 
         # ── Agent assessment verdicts (FIX Issue #17) ────────────────────
         agent_verdicts = self._compute_agent_verdicts(
-            support, mechanistic, risk, contradictions, safety_profile, scientific_context
+            support, mechanistic, risk, contradictions, safety_profile, scientific_context, package=package
         )
 
         # ── Next steps (FIX Issue #15) ───────────────────────────────────
@@ -1668,12 +1729,18 @@ class ReasoningOrchestrator:
         else:
             source_breakdown_str = ""
 
+        risk_summary_label = (
+            f"Observed Clinical Risk Signals: NONE DETECTED (Risk Score = {risk.score:.3f}, Safety Signal Assessment: Grade {safety_profile.overall_safety_grade})"
+            if (risk.score == 0.0 and risk.level in ("NONE", "LOW"))
+            else f"Risk Level: {risk.score:.1%} ({risk.level})"
+        )
+
         summary = (
             f"CYNTHERA v2.0 analysis of {package.drug.name} → {package.disease.name} "
             f"produced a recommendation of '{recommendation.value}'.\n"
             f"Evidence Strength: {support.score:.1%} ({support.level}) | "
             f"Mechanistic Plausibility: {mechanistic.score:.1%} ({mechanistic.level}) | "
-            f"Risk Level: {risk.score:.1%} ({risk.level}).\n"
+            f"{risk_summary_label}.\n"
             f"{len(all_claims)} claim(s) extracted from literature{source_breakdown_str}, "
             f"{len(contradictions)} contradiction(s) detected."
             f"{prior_note}{safety_note}{paths_note}"
@@ -1692,21 +1759,26 @@ class ReasoningOrchestrator:
 
         # Safety grade legend (FIX Issue #10)
         safety_grade_legend = {
-            "A": "Excellent — clean safety record across all trials",
+            "A": "Grade A — No observed clinical safety signals in evaluated trials",
             "B": "Acceptable — minor concerns, generally safe",
             "C": "Moderate concerns — monitoring and caution recommended",
             "D": "Significant safety concerns — strong contraindications identified",
         }
         safety_desc = safety_grade_legend.get(safety_profile.overall_safety_grade, "Unknown")
 
+        total_retrieved = len(package.evidence_records)
+        eval_support_signals = support.evidence_count
+        extracted_claims_in_ss = max(0, eval_support_signals - total_retrieved)
         confidence_narrative = (
             f"Overall confidence is estimated at {base_confidence:.0%} after accounting for "
             f"data gaps (total penalty: −{confidence_penalty:.0%}).\n\n"
-            f"Evidence quality: The analysis is based on {support.evidence_count} retrieved records "
-            f"representing {evidence_quality_desc}. ERW values are capped per evidence tier to "
-            f"prevent inflation from low-quality records (e.g., reviews and hypotheses).\n\n"
+            f"Evidence quality: The analysis retrieved {total_retrieved} total evidence records "
+            f"and evaluated {eval_support_signals} support signals ({total_retrieved} literature/assay records + "
+            f"{extracted_claims_in_ss} extracted claims), representing {evidence_quality_desc}. "
+            f"ERW values are capped per evidence tier to prevent inflation from low-quality records "
+            f"(e.g., reviews and hypotheses).\n\n"
             f"Safety assessment: Grade {safety_profile.overall_safety_grade} — {safety_desc}. "
-            f"{'A boxed warning was detected.' if safety_profile.has_boxed_warning else 'No boxed warning detected.'}\n\n"
+            f"{'A boxed warning was detected.' if safety_profile.has_boxed_warning else 'No boxed warning detected in evaluated data (standard clinical precautions and known pharmacology apply).'}\n\n"
             f"Safety grade scale: A = Excellent | B = Acceptable | C = Caution | D = Unsafe.\n\n"
             f"Prior knowledge: {prior_ctx.narrative[:200] if prior_ctx.narrative else 'No prior knowledge context available.'}"
         )
@@ -1729,7 +1801,15 @@ class ReasoningOrchestrator:
 
         # ── Positive and Negative Factors (from evidence checks) ────────────
         checks = self._build_evidence_checks(
-            support, mechanistic, risk, contradictions, package
+            support,
+            mechanistic,
+            risk,
+            contradictions,
+            package,
+            is_approved=(scientific_context.regulatory.status == "APPROVED"),
+            disease_name=package.disease.name,
+            has_high_quality_therapeutic=getattr(support, "has_high_quality_therapeutic", False),
+            scientific_context=scientific_context,
         )
         positive_factors: list[str] = []
         negative_factors: list[str] = []
@@ -1786,12 +1866,24 @@ class ReasoningOrchestrator:
             "url": "https://www.uniprot.org/",
             "label": "Open UniProt",
         })
-        sources_accessed.append({
+        react_status = getattr(package, "reactome_retrieval_status", None)
+        if not react_status or react_status == "NOT_ATTEMPTED":
+            react_status = "FAILED" if "reactome" in package.sources_failed else "SUCCESS"
+        react_diag = getattr(package, "reactome_diagnostics", {}) or {}
+        react_entry: dict[str, Any] = {
             "name": "Reactome",
-            "status": "FAILED" if "reactome" in package.sources_failed else "SUCCESS",
+            "status": react_status,
             "url": "https://reactome.org/",
             "label": "Open Reactome",
-        })
+        }
+        if react_diag:
+            s_cnt = react_diag.get("requests_successful", 0)
+            f_cnt = react_diag.get("requests_failed", 0)
+            if f_cnt > 0:
+                react_entry["details"] = f"{s_cnt} succeeded, {f_cnt} failed"
+            elif s_cnt > 0:
+                react_entry["details"] = f"{s_cnt} succeeded"
+        sources_accessed.append(react_entry)
         u_ot = SourceURLBuilder.opentargets_disease_url(package.disease.mesh_id or package.disease.name)
         sources_accessed.append({
             "name": "Open Targets",
@@ -1825,25 +1917,60 @@ class ReasoningOrchestrator:
         })
 
         # ── Fix 6: Separate Narrative Sections ────────────────────────────────
+        cand_pathways = set()
+        for cm in (mechanistic.candidate_mechanisms or []):
+            hops = cm.get("hops", []) if isinstance(cm, dict) else getattr(cm, "hops", [])
+            for h in hops:
+                from_node = h.get("from_node", "") if isinstance(h, dict) else getattr(h, "from_node", "")
+                to_node = h.get("to_node", "") if isinstance(h, dict) else getattr(h, "to_node", "")
+                for node_str in (from_node, to_node):
+                    if node_str.startswith("Pathway:"):
+                        cand_pathways.add(node_str.split("Pathway:", 1)[1].strip())
+        cand_mech_pathway_count = len(cand_pathways) if cand_pathways else (1 if mechanistic.candidate_mechanisms else 0)
+
         mechanistic_narrative = (
             f"Mechanistic Assessment: {mechanistic.level} (Score = {mechanistic.score:.3f}).\n"
+            f"Biological Pathways: Candidate Mechanism Pathways: {cand_mech_pathway_count} (Annotated Reactome Pathways: {mechanistic.pathway_count}).\n"
             f"Literature Grounding: {mechanistic.literature_grounding_level}.\n"
             f"Candidate Biological Mechanisms Discovered: {len(mechanistic.candidate_mechanisms)}.\n"
             f"Primary Mechanistic Chain: {' → '.join(mechanistic.mechanistic_chain) if mechanistic.mechanistic_chain else 'None identified'}.\n"
             f"Rationale: {mechanistic.rationale}"
         )
 
+        efficacy_note = (
+            "Pair-specific clinical trial efficacy demonstrated."
+            if getattr(support, "has_high_quality_therapeutic", False)
+            else "NOT ESTABLISHED / NO EFFICACY DEMONSTRATED (0 successful efficacy trials identified for this pair)."
+        )
+        n_pkg_records = len(getattr(package, "evidence_records", []))
+        n_claims_ss = max(0, support.evidence_count - n_pkg_records)
         clinical_narrative = (
-            f"Clinical Evidence Assessment: {support.level} Literature Support (Score = {support.score:.3f}).\n"
-            f"Clinical Trial Status: {ct_status}.\n"
-            f"Clinical Trial Findings: {len(package.clinical_trials)} trial(s) evaluated, {risk.failed_trial_count} clinically significant failure(s).\n"
-            f"Literature Support Rationale: {support.rationale}"
+            f"Evidence & Clinical Investigation Assessment:\n"
+            f"A. Literature & Preclinical Evidence:\n"
+            f"   Support Score: {support.score:.3f} {support.level} — {support.evidence_count} evaluated support signals "
+            f"({n_pkg_records} retrieved evidence records + {n_claims_ss} extracted claims)\n"
+            f"   Rationale: Evaluated from {support.evidence_count} evaluated support signals "
+            f"({n_pkg_records} retrieved evidence records + {n_claims_ss} extracted claims).\n"
+            f"B. Clinical Trial Investigation:\n"
+            f"   Clinical Trial Status: {ct_status}\n"
+            f"   Clinical Trials Evaluated: {len(package.clinical_trials)} trial(s) evaluated, {risk.failed_trial_count} clinically significant safety/futility failure(s).\n"
+            f"   Pair-Specific Clinical Efficacy: {efficacy_note}"
         )
 
+        safety_disclaimer = (
+            "No safety termination signals or boxed warnings detected in evaluated data. "
+            "Standard clinical precautions and known pharmacology still apply."
+            if risk.score == 0.0
+            else "Standard clinical precautions and monitoring required."
+        )
+        risk_label = "NONE DETECTED" if (risk.score == 0.0 and risk.level in ("NONE", "LOW")) else risk.level
         safety_narrative = (
-            f"Safety & Risk Assessment: Grade {safety_profile.overall_safety_grade} — {safety_desc} (Risk Score = {risk.score:.3f}, {risk.level}).\n"
+            f"Safety & Risk Assessment: Grade {safety_profile.overall_safety_grade} — {safety_desc}.\n"
+            f"A. Observed Clinical Risk Signals: {risk_label} (Observed Risk Signals: {risk_label}, Risk Score = {risk.score:.3f}, Safety Signal Assessment: Grade {safety_profile.overall_safety_grade}).\n"
+            f"B. Known Pharmacological Risk Context: NOT ASSESSED IN CLINICAL TRIAL DATA (Standard clinical precautions and known pharmacology profile still apply).\n"
             f"Boxed Warning: {'YES' if safety_profile.has_boxed_warning else 'NO'}.\n"
-            f"Risk Factors & Signal Analysis: {risk.rationale}"
+            f"Risk Factors & Signal Analysis: {risk.rationale}\n"
+            f"Qualification: {safety_disclaimer}"
         )
 
         final_synthesis = (
@@ -1851,8 +1978,37 @@ class ReasoningOrchestrator:
             f"Regulatory Status: {scientific_context.regulatory.status} (Term: {prior_ctx.matched_indication_term or 'N/A'}).\n"
             f"1. Mechanistic Plausibility: {mechanistic.level} ({mechanistic.score:.3f})\n"
             f"2. Literature/Clinical Support: {support.level} ({support.score:.3f})\n"
-            f"3. Risk & Safety Profile: {risk.level} ({risk.score:.3f}, Grade {safety_profile.overall_safety_grade})\n"
+            f"3. Risk & Safety Profile: Observed Clinical Risk Signals: {risk_label} (Risk Score = {risk.score:.3f}, Safety Signal Assessment: Grade {safety_profile.overall_safety_grade})\n"
             f"Conclusion Summary: {reasons[0] if reasons else 'No recommendation reasons generated.'}"
+        )
+
+        # ── Canonical EvidenceSummary ──────────────────────────────────────────
+        val_cand_count = sum(
+            1 for c in (mechanistic.candidate_mechanisms or [])
+            if (c.get("discovery_status") == "VALIDATED" if isinstance(c, dict) else getattr(c, "discovery_status", "") == "VALIDATED")
+        )
+        target_uniprots = {t.protein_uniprot for t in getattr(package, "targets", []) if getattr(t, "protein_uniprot", None)}
+        subgraph_mapped = sum(
+            1 for e in getattr(package, "evidence_records", [])
+            if (getattr(e, "target_uniprot", None) in target_uniprots) or bool(getattr(e, "disease_identifier", None))
+        )
+        if subgraph_mapped == 0:
+            subgraph_mapped = len(getattr(package, "evidence_records", []))
+
+        evidence_summary = EvidenceSummary(
+            total_retrieved_records=len(getattr(package, "evidence_records", [])),
+            subgraph_mapped_records=subgraph_mapped,
+            literature_claims_extracted=len(all_claims),
+            evaluated_support_signals=support.evidence_count,
+            clinical_trials_evaluated=len(getattr(package, "clinical_trials", [])),
+            clinical_trials_failed=risk.failed_trial_count,
+            clinical_trials_successful=1 if getattr(support, "has_high_quality_therapeutic", False) else getattr(support, "clinical_trial_success_count", 0),
+            candidate_mechanisms_count=len(mechanistic.candidate_mechanisms or []),
+            validated_mechanisms_count=val_cand_count,
+            mechanistic_paths_count=len(mechanistic_paths),
+            pathways_annotated_count=mechanistic.pathway_count,
+            candidate_mechanism_pathways_count=cand_mech_pathway_count,
+            targets_count=len(getattr(package, "targets", [])),
         )
 
         # ── Phase 4D: Compute Therapeutic Alignment Report ──────────────────
@@ -1867,6 +2023,21 @@ class ReasoningOrchestrator:
             except Exception as exc:
                 logger.warning("therapeutic_alignment_computation_failed", extra={"error": str(exc)})
                 ta_dict = {}
+
+        ds_diagnostics = {
+            "reactome": {
+                "status": react_status,
+                "requests_successful": react_diag.get("requests_successful", 0),
+                "requests_failed": react_diag.get("requests_failed", 0),
+                "requests_total": react_diag.get("requests_total", 0),
+                "failed_endpoints": react_diag.get("failed_endpoints", []),
+            },
+            "clinicaltrials": {
+                "status": ct_status,
+                "trial_count": len(getattr(package, "clinical_trials", [])),
+                "failed_count": risk.failed_trial_count,
+            },
+        }
 
         return ScientificAuditReport(
             summary=summary,
@@ -1898,6 +2069,8 @@ class ReasoningOrchestrator:
                 else {}
             ),
             rule_minus_one_trace=getattr(self, "_last_rule_minus_one_trace", {}),
+            evidence_summary=evidence_summary,
+            data_source_diagnostics=ds_diagnostics,
         )
 
     def _extract_citations(self, evidence_records: list) -> list[str]:
@@ -1946,6 +2119,7 @@ class ReasoningOrchestrator:
         contradictions: list[Contradiction],
         safety_profile: SafetyProfile,
         scientific_context: ScientificContext,
+        package: RetrievalPackage | None = None,
     ) -> dict[str, str]:
         """Compute agent-level verdicts for the report.
 
@@ -1955,31 +2129,53 @@ class ReasoningOrchestrator:
         verdicts = {}
 
         # Mechanistic Expert Agent
-        if mechanistic.score >= 0.7:
-            verdicts["Mechanistic Expert Agent"] = f"HIGH ({mechanistic.score:.3f}) — strong target-pathway evidence"
-        elif mechanistic.score >= 0.4:
-            verdicts["Mechanistic Expert Agent"] = f"MEDIUM ({mechanistic.score:.3f}) — partial mechanistic support"
+        cands = getattr(mechanistic, "candidate_mechanisms", []) or []
+        best_cand = cands[0] if cands else None
+        is_cand_validated = False
+        if best_cand:
+            if isinstance(best_cand, dict):
+                is_cand_validated = best_cand.get("discovery_status") == "VALIDATED"
+            else:
+                is_cand_validated = getattr(best_cand, "discovery_status", "") == "VALIDATED"
+
+        if mechanistic.score >= 0.7 and is_cand_validated:
+            verdicts["Mechanistic Expert Agent"] = f"HIGH ({mechanistic.score:.3f}) — validated target-pathway mechanism"
+        elif mechanistic.score >= 0.4 and is_cand_validated:
+            verdicts["Mechanistic Expert Agent"] = f"MEDIUM ({mechanistic.score:.3f}) — validated partial mechanistic support"
+        elif mechanistic.score > 0.0:
+            verdicts["Mechanistic Expert Agent"] = f"LOW ({mechanistic.score:.3f}) — structural candidate only; biological bridge unvalidated by literature"
         else:
             verdicts["Mechanistic Expert Agent"] = f"LOW ({mechanistic.score:.3f}) — insufficient mechanistic data"
 
         # Clinical Evidence Expert Agent
-        if risk.failed_trial_count == 0 and support.evidence_count >= 5:
-            verdicts["Clinical Evidence Agent"] = f"MEDIUM — {support.evidence_count} records, 0 failed trials"
-        elif risk.failed_trial_count > 0:
-            verdicts["Clinical Evidence Agent"] = f"LOW — {risk.failed_trial_count} failed/terminated trial(s)"
+        n_trials = len(package.clinical_trials) if package and hasattr(package, "clinical_trials") else 0
+        has_success = bool(
+            getattr(support, "has_high_quality_therapeutic", False)
+            or (getattr(support, "clinical_trial_success_count", 0) > 0)
+        )
+        if n_trials > 0:
+            if risk.failed_trial_count > 0:
+                verdicts["Clinical Evidence Agent"] = f"LOW / CONFLICT — {n_trials} trial(s) evaluated, {risk.failed_trial_count} failed/terminated trial(s)"
+            elif has_success:
+                verdicts["Clinical Evidence Agent"] = f"HIGH — {n_trials} trial(s) evaluated; positive clinical trial efficacy demonstrated"
+            else:
+                verdicts["Clinical Evidence Agent"] = f"UNCERTAIN / CAUTION — {n_trials} clinical trial(s) evaluated; 0 failed trials, but pair-specific therapeutic efficacy is not established"
+        elif support.evidence_count >= 5:
+            verdicts["Clinical Evidence Agent"] = f"LOW — 0 clinical trials evaluated for this pair ({support.evidence_count} literature/assay records retrieved)"
         else:
             verdicts["Clinical Evidence Agent"] = "LOW — insufficient clinical data"
 
         # Support Assessment Agent
+        n_rec = len(package.evidence_records) if package and hasattr(package, "evidence_records") else support.evidence_count
         verdicts["Support Assessment Agent"] = (
             f"{support.level} ({support.score:.3f}) — "
-            f"{support.evidence_count} evidence records"
+            f"{support.evidence_count} evaluated signals ({n_rec} retrieved records + claims, presence metric)"
         )
 
         # Risk Assessment Agent
+        risk_desc = "no observed risk signals" if (risk.score == 0.0 and risk.level == "NONE") else f"{risk.level} risk ({risk.score:.3f})"
         verdicts["Risk Assessment Agent"] = (
-            f"{risk.level} risk ({risk.score:.3f}) — "
-            f"safety grade {safety_profile.overall_safety_grade}"
+            f"{risk_desc} — safety grade {safety_profile.overall_safety_grade} (evaluated data)"
         )
 
         # Contradiction Analysis Agent

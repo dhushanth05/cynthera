@@ -477,7 +477,7 @@ class ClinicalSafetyAgent:
             )
 
         grade_notes = {
-            "A": "Strong clean safety record — no significant concerns identified.",
+            "A": "Grade A — No observed clinical safety signals in evaluated trial data.",
             "B": "Acceptable safety profile with minor concerns.",
             "C": "Moderate safety concerns — careful monitoring recommended.",
             "D": "Significant safety concerns — additional preclinical/clinical review required.",

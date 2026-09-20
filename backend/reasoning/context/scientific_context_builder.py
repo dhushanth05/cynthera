@@ -281,11 +281,31 @@ class ScientificContextBuilder:
         else:
             status = MECHANISTIC_WEAK
 
+        cand_mechs = getattr(mechanistic, "candidate_mechanisms", []) or []
+        validated_cands = [
+            c for c in cand_mechs
+            if (c.get("discovery_status") == "VALIDATED" if isinstance(c, dict) else getattr(c, "discovery_status", "") == "VALIDATED")
+        ]
+
         evidence: list[str] = []
-        for path in (mechanistic_paths or [])[:2]:
-            desc = getattr(path, "description", "") or ""
-            if desc:
+        if validated_cands:
+            for cand in validated_cands[:2]:
+                name = cand.get("name") if isinstance(cand, dict) else getattr(cand, "name", "")
+                chain = " → ".join(cand.get("summary_chain", [])) if isinstance(cand, dict) else " → ".join(getattr(cand, "summary_chain", []))
+                desc = chain or name or "Validated mechanistic path"
                 evidence.append(f"Validated path: {desc}")
+        elif mechanistic_paths:
+            for path in (mechanistic_paths or [])[:2]:
+                desc = getattr(path, "description", "") or ""
+                if desc:
+                    evidence.append(f"Candidate path: {desc} (unvalidated causal bridge)")
+        elif cand_mechs:
+            for cand in cand_mechs[:2]:
+                name = cand.get("name") if isinstance(cand, dict) else getattr(cand, "name", "")
+                chain = " → ".join(cand.get("summary_chain", [])) if isinstance(cand, dict) else " → ".join(getattr(cand, "summary_chain", []))
+                desc = chain or name or "Candidate mechanistic hypothesis"
+                evidence.append(f"Candidate path: {desc} (unvalidated causal bridge)")
+
         if not evidence:
             evidence.append("No validated mechanistic paths traced")
 

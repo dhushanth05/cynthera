@@ -189,7 +189,14 @@ class MechanismValidator:
             )
             drug_target = index == 0
             disease_relation = "DISEASE" in hop.to_node.upper() or hop.predicate == "ASSOCIATED_WITH"
-            status = "STRUCTURAL_EVIDENCE" if structural else "DATABASE_SUPPORTED"
+            if structural:
+                status = "STRUCTURAL_EVIDENCE"
+            elif disease_relation:
+                status = "TARGET_DISEASE_ASSOCIATION"
+            elif drug_target:
+                status = "DIRECT_TARGET_ASSOCIATION"
+            else:
+                status = "DATABASE_SUPPORTED"
             evidence_type = "STRUCTURAL" if structural else ("DIRECT" if drug_target else "CURATED")
             directionality = "NOT_APPLICABLE"
             if drug_target:

@@ -204,25 +204,36 @@ class PDFReporter:
         ma = result.mechanistic_assessment
         ra = result.risk_assessment
 
+        es = getattr(result.audit_report, "evidence_summary", None) or getattr(result, "evidence_summary", None)
+        ra_level_display = "NONE DETECTED" if (ra.score == 0.0 and ra.level in ("NONE", "LOW")) else ra.level
+        ra_details = (
+            "Observed Clinical Risk Signals: NONE DETECTED (Grade A)\nKnown Pharmacological Risk Context: NOT ASSESSED (Standard clinical precautions apply)"
+            if ra.score == 0.0
+            else f"{ra.failed_trial_count} failed trials, {ra.contradiction_count} contradictions"
+        )
+        total_ret_str = str(es.total_retrieved_records) if es else str(sa.evidence_count)
+        n_claims_ss = max(0, sa.evidence_count - (es.total_retrieved_records if es else sa.evidence_count))
+        cand_mech_pw = es.candidate_mechanism_pathways_count if es and es.candidate_mechanism_pathways_count > 0 else (1 if ma.candidate_mechanisms else 0)
+
         score_data = [
             ["Dimension", "Score", "Level", "Details"],
             [
                 "Support Score (SS)",
                 f"{sa.score:.3f}",
                 sa.level,
-                f"{sa.evidence_count} evidence records",
+                f"Support Score: {sa.score:.3f} {sa.level} — {sa.evidence_count} evaluated support signals ({total_ret_str} retrieved records + {n_claims_ss} extracted claims)",
             ],
             [
                 "Mechanistic Score (MS)",
                 f"{ma.score:.3f}",
                 ma.level,
-                f"{ma.pathway_count} pathways",
+                f"Candidate Mechanism Pathways: {cand_mech_pw} ({ma.pathway_count} annotated pathways, {len(ma.candidate_mechanisms)} candidate hypotheses)",
             ],
             [
                 "Risk Score (RS)",
                 f"{ra.score:.3f}",
-                ra.level,
-                f"{ra.failed_trial_count} failed trials, {ra.contradiction_count} contradictions",
+                ra_level_display,
+                ra_details,
             ],
         ]
         score_table = Table(score_data, colWidths=[5 * cm, 3 * cm, 3 * cm, 6 * cm])
@@ -240,6 +251,40 @@ class PDFReporter:
         ]))
         story.append(score_table)
         story.append(Spacer(1, 0.3 * cm))
+
+        # ── Canonical Evidence Inventory ───────────────────
+        if es:
+            story.append(Paragraph("Canonical Evidence Inventory", section_style))
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0")))
+            ev_data = [
+                ["Evidence Metric", "Count", "Description"],
+                ["Total Retrieved Records", str(es.total_retrieved_records), "Total records retrieved from PubMed, Europe PMC, ChEMBL, and databases"],
+                ["Subgraph-Mapped Records", str(es.subgraph_mapped_records), "Evidence records directly anchored to entities in the mechanistic graph"],
+                ["Extracted Literature Claims", str(es.literature_claims_extracted), "Biomedical claims extracted from peer-reviewed literature"],
+                ["Evaluated Support Signals", str(es.evaluated_support_signals), "Quality-weighted signals (records + claims) evaluated for support score"],
+                ["Clinical Trials Evaluated", f"{es.clinical_trials_evaluated} ({es.clinical_trials_failed} failed, {es.clinical_trials_successful} efficacious)", "Human clinical trials evaluated from ClinicalTrials.gov"],
+                ["Candidate Mechanisms", f"{es.candidate_mechanisms_count} ({es.validated_mechanisms_count} validated)", "Evaluated biological hypotheses connecting drug targets to disease pathology"],
+                ["Mechanistic Paths", str(es.mechanistic_paths_count), "Graph traversal paths discovered between drug and disease"],
+                ["Candidate Mechanism Pathways", str(es.candidate_mechanism_pathways_count), "Unique pathways traversed by candidate mechanism chains"],
+                ["Annotated Reactome Pathways", str(es.pathways_annotated_count), "Total Reactome pathways associated with drug targets and disease genes"],
+                ["Drug Targets", str(es.targets_count), "Biochemical targets retrieved for the drug"],
+            ]
+            ev_table = Table(ev_data, colWidths=[5 * cm, 3.5 * cm, 8.5 * cm])
+            ev_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#334155")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8fafc"), colors.white]),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            story.append(ev_table)
+            story.append(Spacer(1, 0.3 * cm))
+
 
         # ── Scientific Context (dimensional prior knowledge) ────────────
         sc = getattr(result.audit_report, "scientific_context", {}) or {}
@@ -358,6 +403,8 @@ class PDFReporter:
             for s in srcs:
                 s_name = s.get("name", "")
                 s_stat = s.get("status", "SUCCESS")
+                if s.get("details"):
+                    s_stat = f"{s_stat} ({s['details']})"
                 s_url = s.get("url", "#")
                 s_lbl = s.get("label", "Open Source")
                 link_p = Paragraph(f"<a href='{s_url}' color='#3b82f6'><u>[{s_lbl}]</u></a>", body_style)
@@ -406,6 +453,22 @@ class PDFReporter:
             ]))
             story.append(con_table)
 
+        # ── Decision Factors ───────────────────────────
+        pos_factors = getattr(result.audit_report, "positive_factors", [])
+        neg_factors = getattr(result.audit_report, "negative_factors", [])
+        if pos_factors or neg_factors:
+            story.append(Paragraph("Recommendation Decision Factors", section_style))
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0")))
+            if pos_factors:
+                story.append(Paragraph("<b>Supporting Factors:</b>", body_style))
+                for f in pos_factors:
+                    story.append(Paragraph(f"• <font color='#10b981'>[PASS]</font> {f}", body_style))
+            if neg_factors:
+                story.append(Paragraph("<b>Limiting Factors:</b>", body_style))
+                for f in neg_factors:
+                    story.append(Paragraph(f"• <font color='#ef4444'>[FAIL]</font> {f}", body_style))
+            story.append(Spacer(1, 0.3 * cm))
+
         # ── Recommendation Rules ───────────────────────
         story.append(Paragraph("Recommendation Rule Engine Output", section_style))
         story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0")))
@@ -429,7 +492,7 @@ class PDFReporter:
             story.append(Paragraph(ar.mechanistic_narrative.replace("\n", "<br/>"), body_style))
             story.append(Spacer(1, 0.2 * cm))
 
-            story.append(Paragraph("<b>2. Clinical Evidence Assessment</b>", body_style))
+            story.append(Paragraph("<b>2. Evidence & Clinical Investigation Assessment</b>", body_style))
             story.append(Paragraph(ar.clinical_narrative.replace("\n", "<br/>"), body_style))
             story.append(Spacer(1, 0.2 * cm))
 
@@ -450,7 +513,7 @@ class PDFReporter:
         story.append(Spacer(1, 1 * cm))
         story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0")))
         story.append(Paragraph(
-            f"Generated by CYNTHERA v1.0 | Rule Set: {result.rule_set_version} | "
+            f"Generated by CYNTHERA v2.0 | Rule Set: {result.rule_set_version} | "
             f"Duration: {result.reasoning_duration_ms:.0f}ms",
             ParagraphStyle("Footer", parent=styles["Normal"], fontSize=8,
                            textColor=colors.HexColor("#94a3b8"), alignment=TA_CENTER),
@@ -464,6 +527,13 @@ class PDFReporter:
         sa = result.support_assessment
         ma = result.mechanistic_assessment
         ra = result.risk_assessment
+
+        if ra.score == 0.0:
+            ra_lvl_txt = "Observed Clinical Risk Signals: NONE DETECTED"
+            ra_details_txt = "Safety Grade A — no safety trial terminations or boxed warnings detected in evaluated data. Standard clinical precautions and known pharmacology apply."
+        else:
+            ra_lvl_txt = ra.level
+            ra_details_txt = f"{ra.failed_trial_count} failed trial(s), {ra.contradiction_count} contradiction(s)"
 
         lines = [
             "=" * 70,
@@ -483,11 +553,11 @@ class PDFReporter:
             "THREE-DIMENSIONAL SCORES",
             "─" * 70,
             f"Support Score (SS):     {sa.score:.3f}  [{sa.level}]",
-            f"  {sa.rationale}",
+            f"  Evaluated from {sa.evidence_count} evaluated support signals",
             f"Mechanistic Score (MS): {ma.score:.3f}  [{ma.level}]",
-            f"  {ma.rationale}",
-            f"Risk Score (RS):        {ra.score:.3f}  [{ra.level}]",
-            f"  {ra.rationale}",
+            f"  {len(ma.candidate_mechanisms)} candidate mechanism(s), {ma.pathway_count} annotated pathway(s)",
+            f"Risk Score (RS):        {ra.score:.3f}  [{ra_lvl_txt}]",
+            f"  {ra_details_txt}",
             "",
         ]
 
@@ -550,7 +620,7 @@ class PDFReporter:
         lines += [
             "",
             "=" * 70,
-            f"CYNTHERA v1.0 | Rule Set: {result.rule_set_version} | "
+            f"CYNTHERA v2.0 | Rule Set: {result.rule_set_version} | "
             f"Duration: {result.reasoning_duration_ms:.0f}ms",
             "=" * 70,
         ]

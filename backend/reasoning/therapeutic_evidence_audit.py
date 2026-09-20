@@ -13,6 +13,7 @@ from typing import Any
 
 from backend.core.enums.evidence_type import EvidenceType
 from backend.core.enums.trial_outcome import TrialOutcomeStatus
+from backend.reasoning.directional.therapeutic_evidence import _matches_evaluated_disease
 
 
 @dataclass(frozen=True)
@@ -68,10 +69,56 @@ def audit_high_quality_therapeutic_evidence(package: Any) -> list[TherapeuticEvi
             )
         )
 
+    disease_name = getattr(getattr(package, "disease", None), "name", "")
+    drug_name = getattr(getattr(package, "drug", None), "name", "")
+
+    from backend.core.enums.trial_attribution import TrialDrugRole
+    from backend.reasoning.directional.therapeutic_evidence import is_therapeutically_eligible_evidence
+
     for trial in getattr(package, "clinical_trials", []) or []:
+        trial_text = f"{getattr(trial, 'title', '')} {' '.join(getattr(trial, 'condition_names', []) or [])}".lower()
+        trial_disease_match = _matches_evaluated_disease(trial_text, disease_name) if disease_name else True
+
+        # Semantic eligibility of the trial for the evaluated disease
+        is_eligible_target = True
+        if disease_name:
+            try:
+                is_eligible_target, _ = is_therapeutically_eligible_evidence(trial, drug_name, disease_name)
+            except Exception:
+                is_eligible_target = True
+
+        # Trial attribution check
+        trial_role = getattr(trial, "candidate_drug_role", None)
+        role_str = trial_role.value if hasattr(trial_role, "value") else (str(trial_role) if trial_role is not None else "")
+        attr_decision = not getattr(trial, "attribution_rejected", False)
+
+        if not role_str and drug_name:
+            try:
+                from backend.reasoning.opposition.therapeutic_opposition_assessor import evaluate_trial_attribution
+                attr = evaluate_trial_attribution(trial, drug_name)
+                if attr:
+                    role_str = attr.drug_role.value if hasattr(attr.drug_role, "value") else str(attr.drug_role)
+                    attr_decision = attr.final_attribution_decision
+            except Exception:
+                pass
+
+        is_active_role = attr_decision and role_str not in (
+            "BACKGROUND_CONSTANT_THERAPY",
+            "BACKGROUND_THERAPY",
+            "CONCOMITANT_THERAPY",
+            "COMPARATOR_ONLY",
+            "ACTIVE_COMPARATOR",
+            "PLACEBO_COMPARATOR",
+            "OTHER_UNKNOWN",
+            "",
+        )
+
         pair_scoped = bool(
             getattr(trial, "drug_chembl_id", None)
             and getattr(trial, "disease_identifier", None)
+            and trial_disease_match
+            and is_eligible_target
+            and is_active_role
         )
         explicit_success = getattr(trial, "status", None) == TrialOutcomeStatus.COMPLETED_SUCCESS
         explicit_failure = bool(
@@ -90,11 +137,24 @@ def audit_high_quality_therapeutic_evidence(package: Any) -> list[TherapeuticEvi
             allowed = False
             reason = f"Clinical trial outcome opposes therapeutic hypothesis: {getattr(trial, 'negative_efficacy_reason', None) or getattr(trial, 'why_stopped', None) or 'Documented trial failure or early termination.'}"
         elif explicit_success:
-            direction = "SUPPORTS"
-            quality = "CLINICAL_HUMAN"
-            relevance = True
-            allowed = pair_scoped
-            reason = "Pair-scoped trial has an explicit successful therapeutic outcome." if pair_scoped else "Registry status alone does not establish a successful therapeutic outcome."
+            trial_direction = getattr(trial, "direction", None)
+            dir_str = str(trial_direction.value if hasattr(trial_direction, "value") else (trial_direction or ""))
+
+            is_valid_support = pair_scoped and (
+                dir_str in ("SUPPORTS", "POSITIVE", "STATISTICALLY_SIGNIFICANT_BENEFIT")
+                or (dir_str not in ("UNKNOWN", "NEUTRAL", "INCONCLUSIVE", "OPPOSES") and is_active_role)
+                or (not dir_str and is_active_role)
+            )
+
+            direction = "SUPPORTS" if is_valid_support else "UNKNOWN"
+            quality = "CLINICAL_HUMAN" if is_valid_support else "REGISTERED_STATUS_ONLY"
+            relevance = is_valid_support
+            allowed = is_valid_support
+            reason = (
+                "Pair-scoped trial has an explicit successful therapeutic outcome."
+                if is_valid_support
+                else "Trial direction is ambiguous/unknown or drug is not evaluated as primary therapeutic agent."
+            )
         else:
             direction = "UNKNOWN"
             quality = "REGISTERED_STATUS_ONLY"

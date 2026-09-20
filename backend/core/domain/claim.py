@@ -9,6 +9,7 @@ from typing import Optional, Any
 from pydantic import BaseModel, Field, field_validator
 
 from backend.core.enums.predicate_type import PredicateType
+from backend.core.enums.evidence_polarity import EvidencePolarity
 from backend.core.value_objects.erw import ERW
 from backend.core.value_objects.provenance import ProvenanceReference
 
@@ -65,6 +66,32 @@ class Claim(BaseModel):
     attribution_trace: Optional[dict[str, Any]] = Field(
         default=None,
         description="Structured attribution diagnostic trace for CT.gov-sourced negative claims.",
+    )
+    polarity: EvidencePolarity = Field(
+        default=EvidencePolarity.UNKNOWN,
+        description="Directional polarity of the claim relative to the evaluated hypothesis.",
+    )
+    polarity_confidence: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Confidence in polarity classification [0.0, 1.0].",
+    )
+    therapeutic_support: bool = Field(
+        default=False,
+        description="True if claim explicitly establishes therapeutic support for the evaluated disease.",
+    )
+    adverse_event_flag: bool = Field(
+        default=False,
+        description="True if claim describes an adverse event, complication, toxicity, or etiologic risk.",
+    )
+    polarity_reason: Optional[str] = Field(
+        default=None,
+        description="Forensic rationale explaining why this polarity was assigned.",
+    )
+    polarity_provenance: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Detailed provenance and qualification metadata for audit trail.",
     )
 
     @field_validator("confidence")

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from backend.core.enums.recommendation import RecommendationStatus
 from backend.core.domain.contradiction import Contradiction
 from backend.core.domain.contradiction_summary import ContradictionSummary
+from backend.core.value_objects.evidence_summary import EvidenceSummary
 
 
 class SupportAssessment(BaseModel):
@@ -340,6 +341,14 @@ class ScientificAuditReport(BaseModel):
         default_factory=dict,
         description="Phase 1B Rule -1 routing and opposition evaluation trace.",
     )
+    evidence_summary: EvidenceSummary | None = Field(
+        default=None,
+        description="Canonical authoritative evidence metrics summary across all layers.",
+    )
+    data_source_diagnostics: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Detailed data source diagnostics including successful and failed request counts.",
+    )
 
 
 
@@ -413,6 +422,10 @@ class ReasoningResult(BaseModel):
     opposition_assessment: OppositionAssessment = Field(
         default_factory=OppositionAssessment.empty,
         description="Phase 5.16 therapeutic opposition evidence assessment.",
+    )
+    evidence_summary: EvidenceSummary | None = Field(
+        default=None,
+        description="Canonical authoritative evidence metrics summary across all layers.",
     )
 
     @property

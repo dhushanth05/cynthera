@@ -227,8 +227,11 @@ class RetrievalPipeline:
         reactome_reaction_evidence: list[ReactomeReactionEvidence] = []
 
         # Process Reactome pathways & reactions
+        reactome_status = "NOT_ATTEMPTED"
+        reactome_diagnostics: dict[str, Any] = {}
         if isinstance(reactome_data, Exception):
             sources_failed.append("reactome")
+            reactome_status = "FAILED"
             logger.warning("reactome_failed", extra={"error": str(reactome_data)})
         else:
             sources_queried.append("reactome")
@@ -247,6 +250,11 @@ class RetrievalPipeline:
                             original_identifiers=tuple(m.get("original_identifiers", ())),
                         )
                     )
+            req_sum = reactome_data.get("request_summary", {})
+            reactome_diagnostics = req_sum
+            failed_reqs = req_sum.get("requests_failed", 0)
+            tot_reqs = req_sum.get("requests_total", 0)
+            reactome_status = self._derive_reactome_status(len(pathways), failed_reqs, tot_reqs)
 
         # Process ClinicalTrials
         if isinstance(trials_data, Exception):
@@ -446,6 +454,8 @@ class RetrievalPipeline:
             sealed_at=datetime.utcnow(),
             approval_signal=approval_signal,
             clinical_trial_retrieval_status=ct_status,
+            reactome_retrieval_status=reactome_status,
+            reactome_diagnostics=reactome_diagnostics,
             validated_disease_genes=validated_disease_genes,
             identifier_mappings=identifier_mappings,
             reactome_reaction_evidence=reactome_reaction_evidence,
@@ -1112,6 +1122,7 @@ class RetrievalPipeline:
                 "pathways": list(seen_stids.values()),
                 "mappings": participant_mappings,
                 "reaction_evidence": reaction_evidence_list,
+                "request_summary": conn.get_request_summary(),
             }
 
     async def _fetch_clinicaltrials(self, drug_name: str, disease_name: str) -> dict[str, Any]:
@@ -1722,10 +1733,19 @@ class RetrievalPipeline:
             "patient preference", "usability", "ease of use", "satisfaction questionnaire",
             "device handling", "injection site pain", "self-injection", "preference between",
             "pharmacokinetic", "pharmacodynamics", "bioequivalence", "bioavailability",
-            "area under the curve", "cmax", "tmax", "steady state concentration",
+            "area under the curve", "auc", "auc0", "aucinf", "cmax", "tmax", "steady state concentration",
             "compliance rate", "adherence rate", "pill count",
         )
         return any(kw in text for kw in non_efficacy_keywords)
+
+    @staticmethod
+    def _derive_reactome_status(pathway_count: int, requests_failed: int, requests_total: int) -> str:
+        """Derive overall Reactome retrieval status from request counts and retrieved pathways."""
+        if requests_failed > 0 and pathway_count > 0:
+            return "PARTIAL"
+        elif requests_failed > 0 and pathway_count == 0:
+            return "FAILED"
+        return "SUCCESS"
 
     @staticmethod
     def _parse_float(val: Any) -> float | None:

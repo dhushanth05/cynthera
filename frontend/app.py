@@ -299,6 +299,10 @@ def render_score_card(
         "LOW": "#ef4444", "NONE": "#64748b",
     }
     badge_color = level_colors.get(level.upper(), "#64748b")
+    if "Risk" in label and (level.upper() == "NONE" or score == 0.0):
+        display_level = "NONE DETECTED"
+    else:
+        display_level = level
     degraded_html = (
         '<div style="margin-top: 0.5rem; font-size: 0.7rem; color: #f59e0b; '
         'border: 1px solid #f59e0b44; background: #f59e0b11; padding: 0.2rem 0.4rem; '
@@ -311,7 +315,7 @@ def render_score_card(
         <div class="score-value" style="color: {color};">{score:.3f}</div>
         <div class="score-label">{label}</div>
         <div class="score-level" style="background: {badge_color}22; color: {badge_color}; border: 1px solid {badge_color}55;">
-            {level}
+            {display_level}
         </div>
         {degraded_html}
     </div>
@@ -383,7 +387,7 @@ with st.sidebar:
     )
     st.markdown("---")
     st.markdown(
-        "<small style='color: #64748b;'>CYNTHERA v2.0 | Rule Set v2.0</small>",
+        "<small style='color: #64748b;'>CYNTHERA v2.0 | Rule Set v3.2</small>",
         unsafe_allow_html=True,
     )
 
@@ -579,7 +583,7 @@ elif page == "📊 Results":
         col1, col2, col3 = st.columns(3)
         with col1:
             render_score_card(
-                "Support Score (SS)",
+                "Support Score (SS) — Presence Metric",
                 result.support_assessment.score,
                 result.support_assessment.level,
                 "#3b82f6",
@@ -611,16 +615,47 @@ elif page == "📊 Results":
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown("### 📊 Evidence Summary")
+            _es = getattr(getattr(result, "audit_report", None), "evidence_summary", None) or getattr(result, "evidence_summary", None)
+            _ev_rec_count = _es.total_retrieved_records if _es else len(pkg.evidence_records)
+            _subgraph_mapped = _es.subgraph_mapped_records if _es else 0
+            _eval_signals = _es.evaluated_support_signals if _es else result.support_assessment.evidence_count
+            _trials_count = _es.clinical_trials_evaluated if _es else len(pkg.clinical_trials)
+            _trials_fail = _es.clinical_trials_failed if _es else result.risk_assessment.failed_trial_count
+            _trials_succ = _es.clinical_trials_successful if _es else 0
+            _cands_count = _es.candidate_mechanisms_count if _es else len(getattr(result.mechanistic_assessment, "candidate_mechanisms", []) or [])
+            _cands_val = _es.validated_mechanisms_count if _es else 0
+            _pathways_count = _es.pathways_annotated_count if _es else result.mechanistic_assessment.pathway_count
             st.markdown(f"""
             <div class="info-panel">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                    <div><div style="font-size: 1.8rem; font-weight: 700; color: #3b82f6;">{len(pkg.evidence_records)}</div><div style="color: #94a3b8; font-size: 0.8rem;">Evidence Records</div></div>
-                    <div><div style="font-size: 1.8rem; font-weight: 700; color: #8b5cf6;">{len(pkg.targets)}</div><div style="color: #94a3b8; font-size: 0.8rem;">Drug Targets</div></div>
-                    <div><div style="font-size: 1.8rem; font-weight: 700; color: #06b6d4;">{len(pkg.clinical_trials)}</div><div style="color: #94a3b8; font-size: 0.8rem;">Clinical Trials</div></div>
-                    <div><div style="font-size: 1.8rem; font-weight: 700; color: #10b981;">{len(result.contradictions)}</div><div style="color: #94a3b8; font-size: 0.8rem;">Contradictions</div></div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                    <div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: #3b82f6;">{_ev_rec_count}</div>
+                        <div style="color: #94a3b8; font-size: 0.75rem;">Retrieved Records ({_subgraph_mapped} mapped)</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: #60a5fa;">{_eval_signals}</div>
+                        <div style="color: #94a3b8; font-size: 0.75rem;">Evaluated Signals (Records + Claims)</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: #8b5cf6;">{len(pkg.targets)}</div>
+                        <div style="color: #94a3b8; font-size: 0.75rem;">Drug Targets</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: #06b6d4;">{_trials_count}</div>
+                        <div style="color: #94a3b8; font-size: 0.75rem;">Clinical Trials ({_trials_fail} failed, {_trials_succ} efficacious)</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: #10b981;">{_cands_count}</div>
+                        <div style="color: #94a3b8; font-size: 0.75rem;">Candidate Mechanisms ({_cands_val} validated)</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: #f59e0b;">{_pathways_count}</div>
+                        <div style="color: #94a3b8; font-size: 0.75rem;">Annotated Reactome Pathways</div>
+                    </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
+
 
         with col_b:
             st.markdown("### 🌐 Data Sources")
@@ -652,6 +687,12 @@ elif page == "📊 Results":
                 badge_color = "#10b981" if "STRONGLY" in c_level else ("#f59e0b" if "MODERATELY" in c_level else "#ef4444")
                 badge_bg = "rgba(16,185,129,0.12)" if "STRONGLY" in c_level else ("rgba(245,158,11,0.12)" if "MODERATELY" in c_level else "rgba(239,68,68,0.12)")
 
+                status_desc = (
+                    "STRUCTURAL CANDIDATE (UNVALIDATED BRIDGE)"
+                    if c_status == "CANDIDATE_STRUCTURAL"
+                    else ("VALIDATED MECHANISM (LITERATURE SUPPORTED)" if c_status == "VALIDATED" else c_status.replace('_', ' '))
+                )
+
                 st.markdown(f"""
                 <div class="info-panel" style="border-left: 4px solid {badge_color}; margin-bottom: 1rem;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -660,9 +701,10 @@ elif page == "📊 Results":
                             {c_level.replace('_', ' ')} ({c_conf:.1%})
                         </div>
                     </div>
-                    <div style="color: #94a3b8; margin-top: 0.35rem; font-size: 0.82rem;">{c_status.replace('_', ' ')}</div>
+                    <div style="color: #94a3b8; margin-top: 0.35rem; font-size: 0.82rem;">{status_desc}</div>
                 </div>
                 """, unsafe_allow_html=True)
+
 
                 if c_chain:
                     chain_html = " → ".join(
@@ -755,7 +797,7 @@ elif page == "📊 Results":
             grade = safety_grade_in_summary
             grade_color = {"A": "#10b981", "B": "#3b82f6", "C": "#f59e0b", "D": "#ef4444"}.get(grade, "#64748b")
             grade_desc = {
-                "A": "Strong clean safety record",
+                "A": "Grade A — No observed clinical safety signals in evaluated trial data",
                 "B": "Acceptable safety profile",
                 "C": "Moderate concerns — monitoring recommended",
                 "D": "Significant safety concerns",
@@ -967,7 +1009,7 @@ elif page == "📋 Audit Report":
             with st_col2:
                 st.markdown(f"""
                 <div class="info-panel" style="border-left: 4px solid #3b82f6;">
-                    <div style="font-weight: 700; color: #3b82f6; margin-bottom: 0.5rem;">2. 📊 Clinical Evidence Assessment</div>
+                    <div style="font-weight: 700; color: #3b82f6; margin-bottom: 0.5rem;">2. 📊 Evidence & Clinical Investigation Assessment</div>
                     <div style="color: #cbd5e1; font-size: 0.9rem; line-height: 1.5; white-space: pre-wrap;">{c_narrative}</div>
                 </div>
                 """, unsafe_allow_html=True)

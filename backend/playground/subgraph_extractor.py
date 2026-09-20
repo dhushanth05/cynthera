@@ -383,6 +383,12 @@ def extract_relevant_subgraph(
         tgt_clean = ge.target_id.split(":")[-1].upper()
         hop_claims = hop_lookup.get((src_clean, tgt_clean)) or hop_lookup.get((ge.source_id.upper(), ge.target_id.upper())) or []
 
+        tier = (
+            ge.causal_grounding.value
+            if hasattr(ge, "causal_grounding") and hasattr(ge.causal_grounding, "value")
+            else str(getattr(ge, "data_quality", "EVIDENCE_BACKED"))
+        )
+
         edges.append(PlaygroundEdge(
             source_id=ge.source_id,
             target_id=ge.target_id,
@@ -391,7 +397,7 @@ def extract_relevant_subgraph(
             evidence_strength=ge.evidence_strength,
             source_database=ge.source,
             provenance=ge.provenance,
-            data_quality=ge.data_quality,
+            data_quality=tier,
             links=edge_links,
             path_count=edge_path_count,
             evidence_count=ev_count,
@@ -462,7 +468,15 @@ def extract_relevant_subgraph(
         landscape=landscape,
         evidence_gaps=evidence_gaps,
         candidate_mechanisms=list(getattr(result.mechanistic_assessment, "candidate_mechanisms", []) or []),
-        claim_citations=getattr(result, "claim_citations", {}) or {},
+        claim_citations=(
+            getattr(getattr(result, "audit_report", None), "claim_citations", None)
+            if isinstance(getattr(getattr(result, "audit_report", None), "claim_citations", None), dict)
+            else (
+                getattr(result, "claim_citations", {})
+                if isinstance(getattr(result, "claim_citations", None), dict)
+                else {}
+            )
+        ),
         retrieval_confidence=package.retrieval_confidence,
         sources_queried=list(package.sources_queried),
         sources_failed=list(package.sources_failed),

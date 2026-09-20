@@ -291,20 +291,116 @@ def build_evidence_checks(
     )
     contra_list = contradictions or []
 
+    # Approval and clinical efficacy state
+    is_app = kwargs.get("is_approved")
+    if is_app is not None:
+        is_approved_val = bool(is_app)
+    else:
+        app_sig = getattr(package, "approval_signal", None)
+        if app_sig is not None:
+            is_approved_val = bool(getattr(app_sig, "is_approved", False))
+        else:
+            sc = kwargs.get("scientific_context")
+            is_approved_val = bool(getattr(getattr(sc, "regulatory", None), "status", None) == "APPROVED")
+
+    dis_name = (
+        kwargs.get("disease_name")
+        or getattr(getattr(package, "disease", None), "name", "")
+        or kwargs.get("disease", "")
+        or ""
+    )
+
+    ss_high_qual = bool(
+        kwargs.get("has_high_quality_therapeutic")
+        if kwargs.get("has_high_quality_therapeutic") is not None
+        else getattr(support, "has_high_quality_therapeutic", False)
+    )
+
+    # Mechanistic support level & biological bridge validation
+    ms_candidates = getattr(mechanistic, "candidate_mechanisms", []) or []
+    ms_support_level = (
+        getattr(mechanistic, "score_components", {}).get("support_level")
+        if getattr(mechanistic, "score_components", None)
+        else None
+    )
+    is_speculative = (
+        ms_level in ("LOW", "NONE")
+        or ms_support_level == "WEAK_SPECULATIVE"
+        or (
+            ms_candidates and (
+                ms_candidates[0].get("support_level") == "WEAK_SPECULATIVE"
+                if isinstance(ms_candidates[0], dict)
+                else getattr(ms_candidates[0], "support_level", "") == "WEAK_SPECULATIVE"
+            )
+        )
+    ) if (ms_candidates or ms_level in ("LOW", "NONE")) else False
+
+    # Semantic counts for Support Score
+    n_ev_records = len(getattr(package, "evidence_records", [])) if package else ss_count
+    n_claims = max(0, ss_count - n_ev_records)
+    if n_ev_records > 0:
+        ss_signal_str = f"Support Score: {ss_score:.3f} {ss_level} — {ss_count} evaluated support signals ({n_ev_records} retrieved evidence records + {n_claims} extracted claims)"
+    else:
+        ss_signal_str = f"Support Score: {ss_score:.3f} {ss_level} — {ss_count} evaluated support signals"
+
+    # Semantic counts for Mechanistic Score & Pathways
+    cand_pathways = set()
+    for cm in ms_candidates:
+        hops = cm.get("hops", []) if isinstance(cm, dict) else getattr(cm, "hops", [])
+        for h in hops:
+            from_node = h.get("from_node", "") if isinstance(h, dict) else getattr(h, "from_node", "")
+            to_node = h.get("to_node", "") if isinstance(h, dict) else getattr(h, "to_node", "")
+            for node_str in (from_node, to_node):
+                if node_str.startswith("Pathway:"):
+                    cand_pathways.add(node_str.split("Pathway:", 1)[1].strip())
+    annotated_paths_count = len(getattr(package, "pathways", [])) if package and getattr(package, "pathways", None) else ms_paths
+    cand_mech_pathway_count = len(cand_pathways) if cand_pathways else (1 if ms_candidates else (1 if ms_paths > 0 else 0))
+    pathway_detail = f"Candidate Mechanism Pathways: {cand_mech_pathway_count} (Annotated Reactome Pathways: {annotated_paths_count})"
+
     checks: list[str] = []
     checks.append("Evidence signals:")
     checks.append(
         f"  {'[PASS]' if ss_score >= 0.5 else '[FAIL]'} Literature support: "
-        f"SS = {ss_score:.3f} ({ss_level}) from {ss_count} records"
+        f"{ss_signal_str}"
     )
-    checks.append(
-        f"  {'[PASS]' if ms_score >= 0.4 else '[FAIL]'} Mechanistic plausibility: "
-        f"MS = {ms_score:.3f} ({ms_level}), "
-        f"{ms_paths} pathway(s)"
-    )
+
+    if ms_score >= 0.4 and not is_speculative:
+        checks.append(
+            f"  [PASS] Mechanistic plausibility: "
+            f"MS = {ms_score:.3f} ({ms_level}), "
+            f"{pathway_detail}"
+        )
+    else:
+        speculative_tag = " (structural candidate only, unvalidated biological bridge)" if is_speculative and ms_score > 0 else ""
+        checks.append(
+            f"  [FAIL] Mechanistic plausibility: "
+            f"MS = {ms_score:.3f} ({ms_level}), "
+            f"{pathway_detail}{speculative_tag}"
+        )
+
+    dis_str = f" for '{dis_name}'" if dis_name else ""
+    if is_approved_val:
+        checks.append(
+            f"  [PASS] Approved indication anchor: Confirmed approved indication{dis_str}"
+        )
+    else:
+        checks.append(
+            f"  [FAIL] Approved indication anchor: No approved indication{dis_str} (repurposing hypothesis)"
+        )
+
+    if ss_high_qual:
+        checks.append(
+            f"  [PASS] Human clinical efficacy: Documented clinical trial efficacy for this pair"
+        )
+    else:
+        checks.append(
+            f"  [FAIL] Human clinical efficacy: No pair-specific clinical trial success demonstrated"
+        )
+
+    risk_disp = "Observed Risk Signals: NONE DETECTED" if (rs_score == 0.0 and rs_level in ("NONE", "LOW")) else f"Risk Level: {rs_level}"
     checks.append(
         f"  {'[FAIL]' if rs_score >= 0.4 else '[PASS]'} Safety/Risk acceptable: "
-        f"RS = {rs_score:.3f} ({rs_level})"
+        f"Risk Score = {rs_score:.3f} ({risk_disp})"
     )
     if (opposition or opposition_score is not None) and opp_score > 0:
         checks.append(
@@ -321,6 +417,7 @@ def build_evidence_checks(
         f"{'Available' if 'clinicaltrials' not in pkg_sources else 'Unavailable (ClinicalTrials.gov)'}"
     )
     return checks
+
 
 
 def apply_decision_rules(
@@ -438,6 +535,15 @@ def apply_decision_rules(
         support_score
         if support_score is not None
         else (getattr(support, "score", 0.0) if support else 0.0)
+    )
+    ss_level = str(
+        kwargs.get("support_level")
+        if kwargs.get("support_level") is not None
+        else (
+            getattr(support, "level", "HIGH" if ss_score >= 0.7 else ("MEDIUM" if ss_score >= 0.4 else "LOW"))
+            if support
+            else ("HIGH" if ss_score >= 0.7 else ("MEDIUM" if ss_score >= 0.4 else "LOW"))
+        )
     )
     ss_evidence_count = int(
         getattr(support, "evidence_count", 0)
@@ -758,10 +864,16 @@ def apply_decision_rules(
 
         # Rule 1c: Therapeutic Evidence Anchor Gate (Phase 5.17 correctness fix)
         if not ss_high_qual:
+            n_ev_records = len(getattr(package, "evidence_records", [])) if package else ss_evidence_count
+            n_claims = max(0, ss_evidence_count - n_ev_records)
+            if n_ev_records > 0:
+                ss_sig_desc = f"{ss_evidence_count} evaluated support signals ({n_ev_records} retrieved evidence records + {n_claims} extracted claims)"
+            else:
+                ss_sig_desc = f"{ss_evidence_count} evaluated support signals"
             reasons.append(
                 f"Rule 1c (LITERATURE SIGNAL WITHOUT THERAPEUTIC ANCHOR): "
                 f"Support score reflects literature co-mentions "
-                f"(SS = {ss_score:.3f}, from {ss_evidence_count} record(s)) and "
+                f"(Support Score: {ss_score:.3f} {ss_level} — {ss_sig_desc}) and "
                 f"mechanistic plausibility (MS = {ms_score:.3f}), but no "
                 "pair-specific clinical trial success or approved therapeutic indication was found. "
                 "Promoting to UNCERTAIN pending human clinical validation of this drug-disease pair."

@@ -45,6 +45,45 @@ class ReactomeConnector(BaseConnector):
     base_url = REACTOME_BASE
     timeout_seconds = 30.0
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.requests_total: int = 0
+        self.requests_successful: int = 0
+        self.requests_failed: int = 0
+        self.failed_endpoints: list[dict[str, Any]] = []
+
+    def get_request_summary(self) -> dict[str, Any]:
+        """Return structured request diagnostics for this connector instance."""
+        return {
+            "requests_total": self.requests_total,
+            "requests_successful": self.requests_successful,
+            "requests_failed": self.requests_failed,
+            "failed_endpoints": list(self.failed_endpoints),
+        }
+
+    async def _get_reactome(self, url: str, params: dict[str, Any] | None = None) -> Any:
+        """Track request metrics and delegate to _get."""
+        self.requests_total += 1
+        try:
+            res = await self._get(url, params=params)
+            self.requests_successful += 1
+            return res
+        except Exception as exc:
+            self.requests_failed += 1
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if status_code is None:
+                err_str = str(exc)
+                if "404" in err_str:
+                    status_code = 404
+                elif "500" in err_str:
+                    status_code = 500
+            self.failed_endpoints.append({
+                "endpoint": url,
+                "error": str(exc),
+                "status_code": status_code,
+            })
+            raise
+
     def _build_headers(self) -> dict[str, str]:
         """Build default headers override to include custom User-Agent required by Reactome."""
         headers = super()._build_headers()
@@ -67,7 +106,7 @@ class ReactomeConnector(BaseConnector):
         params: dict[str, Any] = {"species": "Homo sapiens"}
         logger.info("reactome_fetch", extra={"uniprot": clean_acc})
         try:
-            result = await self._get(url, params=params)
+            result = await self._get_reactome(url, params=params)
             return {"pathways": result if isinstance(result, list) else []}
         except Exception as exc:
             logger.debug(
@@ -100,7 +139,7 @@ class ReactomeConnector(BaseConnector):
         clean_stid = (reactome_stid or "").strip()
         url = f"{self.base_url}/data/participants/{clean_stid}"
         try:
-            result = await self._get(url)
+            result = await self._get_reactome(url)
             uniprot_ids: list[str] = []
             mappings: list[BiologicalIdentifierMapping] = []
 
@@ -174,7 +213,7 @@ class ReactomeConnector(BaseConnector):
         """
         clean_id = (reactome_id or "").strip()
         url = f"{self.base_url}/data/query/{clean_id}"
-        return await self._get(url)
+        return await self._get_reactome(url)
 
     async def fetch_reactions(self, uniprot_accession: str) -> list[dict[str, Any]]:
         """Fetch all reactions/events directly associated with a UniProt protein.
@@ -192,7 +231,7 @@ class ReactomeConnector(BaseConnector):
             return []
         url = f"{self.base_url}/data/mapping/UniProt/{clean_acc}/reactions"
         try:
-            res = await self._get(url)
+            res = await self._get_reactome(url)
             return res if isinstance(res, list) else []
         except Exception as exc:
             logger.warning(
@@ -217,7 +256,7 @@ class ReactomeConnector(BaseConnector):
             return {}
         url = f"{self.base_url}/data/query/enhanced/{clean_id}"
         try:
-            res = await self._get(url)
+            res = await self._get_reactome(url)
             return res if isinstance(res, dict) else {}
         except Exception as exc:
             logger.warning(
@@ -242,7 +281,7 @@ class ReactomeConnector(BaseConnector):
             return []
         url = f"{self.base_url}/data/event/{clean_id}/ancestors"
         try:
-            res = await self._get(url)
+            res = await self._get_reactome(url)
             return res if isinstance(res, list) else []
         except Exception as exc:
             logger.warning(
@@ -267,7 +306,7 @@ class ReactomeConnector(BaseConnector):
             return {}
         url = f"{self.base_url}/data/query/enhanced/{clean_id}"
         try:
-            res = await self._get(url)
+            res = await self._get_reactome(url)
             return res if isinstance(res, dict) else {}
         except Exception as exc:
             logger.warning(
@@ -292,7 +331,7 @@ class ReactomeConnector(BaseConnector):
             return []
         url = f"{self.base_url}/data/participants/{clean_id}/participatingPhysicalEntities"
         try:
-            res = await self._get(url)
+            res = await self._get_reactome(url)
             return res if isinstance(res, list) else []
         except Exception as exc:
             logger.debug(

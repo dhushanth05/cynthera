@@ -547,6 +547,8 @@ async def run_evaluation(
     output_dir: str = "evaluation_outputs/100_case_final",
     resume: bool = True,
     timeout: int = CASE_TIMEOUT_SECONDS,
+    case_id: str | None = None,
+    limit: int | None = None,
 ) -> None:
     """Run full 100-case evaluation with progressive logging and live progress tracking."""
     out_path = Path(output_dir)
@@ -556,6 +558,13 @@ async def run_evaluation(
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest: list[dict[str, Any]] = json.load(f)
+
+    if case_id:
+        manifest = [c for c in manifest if c["case_id"] == case_id]
+        print(f"Targeting single case: {case_id} ({len(manifest)} found)")
+    elif limit:
+        manifest = manifest[:limit]
+        print(f"Limiting evaluation to first {limit} cases.")
 
     # Resume handling
     completed_results: dict[str, dict[str, Any]] = {}
@@ -822,6 +831,8 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", default="evaluation_outputs/100_case_final", help="Directory for output files")
     parser.add_argument("--resume", action="store_true", default=True, help="Resume from existing results.jsonl")
     parser.add_argument("--timeout", type=int, default=CASE_TIMEOUT_SECONDS, help="Timeout in seconds per case")
+    parser.add_argument("--case-id", type=str, default=None, help="Target single case ID (e.g. TC-082)")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of cases to evaluate")
     args = parser.parse_args()
 
     asyncio.run(run_evaluation(
@@ -829,4 +840,6 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         resume=args.resume,
         timeout=args.timeout,
+        case_id=args.case_id,
+        limit=args.limit,
     ))

@@ -96,8 +96,10 @@ class ChEMBLConnector(BaseConnector):
         try:
             url = f"{self.base_url}/molecule/{chembl_id}.json"
             raw = await self._get(url)
+            max_phase_raw = raw.get("max_phase")
+            max_phase_val = int(float(max_phase_raw)) if max_phase_raw is not None else 0
             return {
-                "max_phase": int(raw.get("max_phase") or 0),
+                "max_phase": max_phase_val,
                 "pref_name": raw.get("pref_name") or "",
                 "molecule_type": raw.get("molecule_type") or "",
                 "therapeutic_flag": bool(raw.get("therapeutic_flag", False)),
@@ -158,7 +160,7 @@ class ChEMBLConnector(BaseConnector):
                     "efo_term": (ind.get("efo_term") or "").lower(),
                     "mesh_id": ind.get("mesh_id", ""),
                     "mesh_heading": (ind.get("mesh_heading") or "").lower(),
-                    "max_phase_for_ind": int(max_phase) if max_phase is not None else 0,
+                    "max_phase_for_ind": int(float(max_phase)) if max_phase is not None else 0,
                     "indication_refs": ind.get("indication_refs", []),
                 })
             logger.info(

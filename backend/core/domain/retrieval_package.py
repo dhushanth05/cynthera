@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 from pydantic import BaseModel, Field
 
 from backend.core.domain.drug import Drug
@@ -86,6 +87,14 @@ class RetrievalPackage(BaseModel):
             "RETRIEVED (trials found), NOT_FOUND (query ok, 0 results), "
             "API_FAILURE (endpoint error), NOT_ATTEMPTED."
         ),
+    )
+    reactome_retrieval_status: str = Field(
+        default="NOT_ATTEMPTED",
+        description="Reactome retrieval outcome: SUCCESS, PARTIAL, FAILED, NOT_ATTEMPTED.",
+    )
+    reactome_diagnostics: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Diagnostics for Reactome retrieval including request counts and failed endpoints.",
     )
     validated_disease_genes: dict[str, float] = Field(
         default_factory=dict,

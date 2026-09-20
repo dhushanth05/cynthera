@@ -30,7 +30,9 @@ class MechanismHop(BaseModel):
         default="CANDIDATE_STRUCTURAL",
         description=(
             "CANDIDATE_STRUCTURAL | DATABASE_SUPPORTED | LITERATURE_SUPPORTED | "
-            "DIRECTION_UNCERTAIN | INSUFFICIENT_EVIDENCE | CONTRADICTED"
+            "DIRECT_TARGET_ASSOCIATION | TARGET_DISEASE_ASSOCIATION | STRUCTURAL_PATH | "
+            "STRUCTURAL_EVIDENCE | VALIDATED_MECHANISM | DIRECTION_UNCERTAIN | "
+            "INSUFFICIENT_EVIDENCE | CONTRADICTED"
         ),
     )
     evidence_strength: float = Field(default=0.5, ge=0.0, le=1.0)
