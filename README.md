@@ -1,190 +1,229 @@
-# 🧬 CYNTHERA — An evidence-traceable, mechanism-grounded AI research assistant for drug repurposing
+# 🧬 CYNTHERA — Evidence-Traceable, Mechanism-Grounded & Directional AI Research Assistant for Drug Repurposing
 
-CYNTHERA investigates a **Drug + Disease** hypothesis and produces a scientifically defensible **mechanistic plausibility assessment** with the underlying biological reasoning and the actual sources that support it exposed for direct inspection.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Unit Tests](https://img.shields.io/badge/tests-366%20passing-brightgreen.svg)](tests/unit/)
+[![Architecture](https://img.shields.io/badge/architecture-sealed%20two--tier-purple.svg)](#-architecture)
+[![Data](https://img.shields.io/badge/data-100%25%20free%20open%20biomedical-orange.svg)](#-data-sources-100-free--open)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#-license--disclaimer)
 
-The system is built on two principles:
+**CYNTHERA** investigates a **Drug + Disease** hypothesis and produces a scientifically defensible, multi-dimensional assessment of **Mechanistic Plausibility** and **Therapeutic Directional Consistency**, backed by multi-hop biological reasoning and traceable to primary sources (PMIDs, DOIs, clinical trial IDs, and curated database records).
 
-1. **Mechanism-first, evidence-grounded reasoning.** Biological relationships (Drug → Target → Pathway → Disease-associated gene → Disease) are traced from retrieved data, not invented by an LLM. LLMs may interpret or summarize retrieved evidence; they do not fabricate it.
-2. **Traceability.** Every important conclusion is linked back through claims and evidence to the actual papers, databases, and trials used — with direct access links where a source is publicly available.
+The system is built on four core principles:
 
----
-
-## ✨ What CYNTHERA does
-
-**Input:** a drug name and a disease name.
-
-```
-Drug: Sildenafil          →          Disease: Pulmonary Arterial Hypertension
-```
-
-**Output:** a structured assessment containing:
-
-| Output component | Description |
-| :--- | :--- |
-| **Mechanistic Plausibility** | `HIGH / MEDIUM / LOW / INSUFFICIENT EVIDENCE` + a numerical score. |
-| **Mechanistic chain** | The multi-hop biological chain `Drug → Target → Pathway → Disease gene → Disease`. |
-| **Why?** | Per-hop explanation with the evidence supporting each step. |
-| **Supporting / contradicting evidence** | Papers and trials for and against the hypothesis. |
-| **Sources accessed** | Exactly which databases and papers were used. |
-| **Direct links** | Clickable access to the underlying resource (paper, database, trial). |
-
-**What CYNTHERA does not do:** it does not autonomously "discover" or clinically recommend drugs. It is a research-support tool: it assembles, scores, and explains the mechanistic evidence for a hypothesis so a domain expert can evaluate it.
+1. **Mechanism-first, evidence-grounded reasoning:** Biological relationships (`Drug → Target → Reaction → Pathway → Disease Gene → Disease`) are constructed from retrieved database records (ChEMBL, Reactome, UniProt, Open Targets, DisGeNET), not invented by a language model. LLMs interpret or extract claims from literature; they never fabricate biological connectivity.
+2. **Strict Semantic Separation:** Mechanistic plausibility, molecular polarity, therapeutic direction, and directional mechanism consistency are evaluated as orthogonal dimensions.
+3. **Traceability:** Every important conclusion is linked back through claims and evidence to primary sources with direct URLs (PubMed, Europe PMC, ChEMBL, UniProt, Reactome, ClinicalTrials.gov).
+4. **Honest Failure & Non-Conflation:** Missing data is never silently converted into biological implausibility. `DATA NOT FOUND`, `SOURCE UNAVAILABLE`, `INSUFFICIENT EVIDENCE`, `CONTRADICTORY EVIDENCE`, `UNSUPPORTED`, and `PLAUSIBLE` are strictly partitioned states.
 
 ---
 
-## ✨ Features
+## 🔬 Scientific Core: The Four Reasoning Dimensions
 
-- **Mechanism-First Reasoning**: Traces multi-hop biological pathways (Drug → Target → Pathway → Disease Gene) using ChEMBL, Reactome, UniProt, Open Targets, and DisGeNET data. Each hop is grounded in retrieved evidence — relationships are never invented.
-- **Evidence-Grounded Scoring**: Deterministic, explainable mechanistic scores computed from actual retrieved biological evidence (target–affinity confidence, pathway participation, disease-gene validation, per-hop confidence). The system can explain exactly why a score was produced.
-- **Anti-Inflation Scoring**: Multiple weak paths are not naively combined into one strong conclusion. Scores are conservative and reproducible.
-- **Per-Hop Mechanistic Reasoning**: Every hop in `Drug → Target → Pathway → Disease gene → Disease` is supported by direction-consistent retrieved evidence and validated by disease-gene associations.
-- **Claim → Evidence → Source → URL Traceability**: Every important conclusion is linked back through its claim and evidence to the actual PMID / DOI / database identifier, with direct source URLs.
-- **Direct Source Access**: Papers expose title, authors, year, PMID, DOI, and direct access buttons distinguishing `[Open PubMed]`, `[Open Europe PMC]`, `[Open DOI]`, and `[Open Full Text / PDF]`. PDF/full-text links are shown only when actually and legally publicly available — never fabricated. When the same paper is retrieved from multiple sources, it is deduplicated into one paper with multiple access options.
-- **Source Transparency**: Reports show a `SOURCES ACCESSED` section listing every database and paper used, each with a direct link to the exact resource/entity/paper.
-- **Evidence Separation**: Mechanistic evidence, clinical evidence, and safety/risk evidence are kept clearly separate and never mixed.
-- **Contextual Clinical Trial Analysis**: Inspects `whyStopped` trial logs to distinguish true safety/efficacy failures from administrative friction (low enrollment, COVID-19 delays, funding limits).
-- **Contradiction Detection**: Conflicting evidence is detected, reported, and shown with its sources.
-- **Honest Failure Handling**: Retrieval failures are never silently converted into scientific conclusions. The system distinguishes `DATA NOT FOUND`, `SOURCE UNAVAILABLE`, `IDENTITY RESOLUTION FAILED`, `INSUFFICIENT EVIDENCE`, `CONTRADICTORY EVIDENCE`, `MECHANISTICALLY UNSUPPORTED`, and `MECHANISTICALLY PLAUSIBLE`. A ChEMBL API outage produces `INSUFFICIENT EVIDENCE`, not "not plausible".
-- **Identity Resolution Hard Gate**: Short-circuits invalid queries gracefully when canonical database IDs cannot be resolved.
-- **LLM Claim Extraction with Fallback**: Extracts claims from retrieved literature via Groq/Gemini with an automatic rule-based fallback when the LLM is unavailable.
-- **Raw-Response SQLite Cache**: Tiered TTL caching (structural, associations, literature, clinical trials) with a `--no-cache` bypass for fresh live data.
-- **100% Free Open Biomedical Data**: Built entirely on free, open biomedical APIs.
-- **Interactive Streamlit Web UI, FastAPI, & CLI**: Rich visual dashboard, REST API, and command-line interfaces.
+A common failure mode of biomedical AI is collapsing distinct scientific questions into a single scalar confidence score. CYNTHERA strictly separates four orthogonal dimensions:
+
+```
+┌───────────────────────────────────────────────────────────────────────────────────────────┐
+│                               CYNTHERA REASONING DIMENSIONS                              │
+├──────────────────────────────┬──────────────────────────────┬─────────────────────────────┤
+│ Dimension                    │ Scientific Question          │ Values / Spectrum           │
+├──────────────────────────────┼──────────────────────────────┼─────────────────────────────┤
+│ 1. Mechanistic Plausibility  │ Is there an evidence-backed  │ Score: [0.0, 1.0]           │
+│    (MS)                      │ multi-hop path from drug     │ Level: HIGH / MEDIUM /      │
+│                              │ target to the disease?       │        LOW / INSUFFICIENT   │
+├──────────────────────────────┼──────────────────────────────┼─────────────────────────────┤
+│ 2. Molecular Polarity        │ What is the sign of an       │ POSITIVE (+) / NEGATIVE (-) │
+│                              │ individual molecular edge?   │ / UNKNOWN (?)               │
+├──────────────────────────────┼──────────────────────────────┼─────────────────────────────┤
+│ 3. Therapeutic Direction     │ Does drug action match the   │ SUPPORTS / OPPOSES /        │
+│    Alignment                 │ required disease target      │ INSUFFICIENT                │
+│                              │ direction of effect?         │                             │
+├──────────────────────────────┼──────────────────────────────┼─────────────────────────────┤
+│ 4. Directional Mechanism     │ Does the multi-hop pathway   │ CONSISTENT / CONTRADICTORY  │
+│    Consistency               │ preserve or contradict the   │ / PARTIAL / UNKNOWN         │
+│                              │ target therapeutic action?   │                             │
+└──────────────────────────────┴──────────────────────────────┴─────────────────────────────┘
+```
+
+### The Reactome Invariant
+Reactome participation roles (`CATALYST`, `INPUT`, `OUTPUT`, `PARTICIPANT`, `COMPLEX_COMPONENT`, `ENTITY_SET_MEMBER`) represent **structural physical connectivity**, not causal regulation:
+- Structural Reactome participation strictly receives `MolecularPolarity.UNKNOWN` and `CausalGrounding.STRUCTURAL`.
+- Only explicit regulatory annotations (`POSITIVE_REGULATOR`, `NEGATIVE_REGULATOR`) or curated literature claims carry non-zero sign.
+- **Low mechanistic score $\neq$ therapeutic opposition.**
+- **Missing reaction evidence $\neq$ mechanistic score of 0.**
+- **High mechanistic plausibility $\neq$ therapeutic support** (e.g., *Testosterone* has high mechanistic connectivity to *Prostate Cancer*, but directionally **OPPOSES** treatment because androgen receptor activation promotes tumor proliferation).
+
+---
+
+## ✨ Features & Capabilities
+
+- **Multi-Hop Evidence Graph & Path Finding**: Dynamically constructs a typed biological `EvidenceGraph` (`DRUG`, `TARGET`, `PATHWAY`, `REACTION`, `GENE`, `DISEASE`). Uses depth-first search (DFS) pathfinding to discover 2-hop to 5-hop reaction-enriched cascades:
+  - *4-Hop Pathway:* `Drug → Target → Pathway → Disease Gene → Disease`
+  - *5-Hop Reaction-Enriched:* `Drug → Target → Reaction → Pathway → Disease Gene → Disease`
+- **Zero-Crowding Pathway Ranking**: Filters to confirmed target participants and prioritizes confirmed disease-gene overlap before slicing pathways.
+- **Evidence Polarity Classification**: Classifies retrieved scientific evidence and claims into directionally grounded polarities (`SUPPORT`, `OPPOSE`, `NEUTRAL/UNCERTAIN`) with negation handling.
+- **Therapeutic Evidence Applicability Gates**: Rigorously validates evidence relevance, preventing comparator-arm outcomes or unselected populations from polluting candidate drug assessments.
+- **Contextual Clinical Trial Analysis**: Connects directly to ClinicalTrials.gov and inspects `whyStopped` trial logs with NLP pattern matching to distinguish true clinical safety/efficacy failures from administrative friction (e.g., low accrual, COVID-19 delays, sponsor funding limits).
+- **Interactive Investigation Playground**:
+  - **Dynamic Subgraph Extraction:** Interactive, force-directed graph exploration of causal paths, evidence nodes, and molecular targets.
+  - **Counterfactual "What-If" Scenario Engine:** Simulates the effect of target perturbations (inhibition, activation, knockout) on downstream disease mediators.
+- **Claim → Evidence → Source → URL Traceability**: Every conclusion links back to exact PMIDs, DOIs, ChEMBL assay IDs, UniProt accessions, Reactome diagram IDs, and ClinicalTrials.gov NCT numbers with direct URLs.
+- **Honest Failure Handling**: Outages and missing data produce partitioned states (`INSUFFICIENT EVIDENCE`, `DATA NOT FOUND`, `SOURCE UNAVAILABLE`) rather than artificial negative scores.
+- **Raw-Response SQLite Cache Layer**: Tiered TTL caching for structural, association, literature, and trial queries, with a `--no-cache` CLI/API bypass.
+- **Multi-Interface Access**: Streamlit Web Dashboard (`frontend/app.py`), Investigation Playground (`frontend/playground_view.py`), FastAPI REST service, and CLI.
 
 ---
 
 ## 🏗️ Architecture
 
-CYNTHERA uses a **sealed two-tier architecture**: a deterministic engineering retrieval layer feeds a structured `RetrievalPackage` into an agentic + rule-based reasoning layer.
+CYNTHERA employs a **sealed two-tier architecture**: a deterministic engineering retrieval layer feeds an immutable, structured `RetrievalPackage` into an agentic + rule-based reasoning layer.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      ENGINEERING LAYER (Deterministic)                  │
-├─────────────────────────────────────────────────────────────────────────┤
-│ Master Orchestrator → Identity Resolver (ChEMBL, MeSH, MONDO, UniProt)   │
-│                       ↓                                                 │
-│ Async Parallel Retrieval Pipeline (PubMed, Europe PMC, Open Targets,    │
-│                     Reactome, ClinicalTrials.gov, DisGeNET, OpenAlex)   │
-│                       ↓                                                 │
-│ SQLite Raw-Response Cache Layer (`data/cynthera.db`)                    │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                        Sealed `RetrievalPackage`
-                                     │
-┌────────────────────────────────────▼────────────────────────────────────┐
-│                      REASONING LAYER (Agentic + Rules)                  │
-├─────────────────────────────────────────────────────────────────────────┤
-│ Claim Extraction Agent (Groq / Gemini LLM, rule-based fallback)         │
-│                       ↓                                                 │
-│ 6 Parallel Expert Agents:                                                │
-│   • Support Assessment Agent     • Mechanistic Expert Agent             │
-│   • Clinical & Safety Agent      • Risk Assessment Agent                │
-│   • Disease Biology Expert       • Contradiction Analysis Agent         │
-│                       ↓                                                 │
-│ Deterministic Consensus & Rule Engine (Evidence-First Rules)            │
-│                       ↓                                                 │
-│ Scientific Audit Report & Recommendation Status                        │
-└─────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                          ENGINEERING RETRIEVAL LAYER (Deterministic)                   │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ Master Orchestrator                                                                    │
+│   ├── Biological Identifier Normalizer (ChEMBL, UniProt, MeSH, MONDO, HGNC)            │
+│   ├── Async Parallel Retrieval Connectors:                                             │
+│   │     • ChEMBL (bioactivity, binding affinities, mechanism of action)                │
+│   │     • UniProt (canonical accessions, human proteome verification)                  │
+│   │     • Reactome (pathway hierarchies, reaction events, molecular roles)             │
+│   │     • Open Targets Platform (disease associations, Direction-of-Effect)            │
+│   │     • DisGeNET (curated gene-disease scores, actionable target trajectories)       │
+│   │     • Europe PMC & PubMed (literature citations, abstracts)                        │
+│   │     • ClinicalTrials.gov (recruitment status, whyStopped termination logs)         │
+│   │     • Semantic Scholar & OpenAlex (citation-weighted literature metadata)          │
+│   └── Tiered SQLite Raw-Response Cache Layer (`data/cynthera.db`)                      │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │
+                               Sealed `RetrievalPackage`
+                                            │
+┌───────────────────────────────────────────▼────────────────────────────────────────────┐
+│                             REASONING & ASSESSMENT LAYER                               │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ 1. Claim Extraction Agent (Groq / Gemini LLM with automatic rule-based fallback)       │
+│ 2. Evidence Graph Builder (Typed multi-relational graph construction)                  │
+│ 3. Multi-Hop Reasoner (DFS pathfinder discovering 2-hop to 5-hop reaction paths)       │
+│ 4. Mechanism Validator (7-dimensional candidate mechanism validation)                  │
+│ 5. Evidence Polarity Classifier & Applicability Gates                                  │
+│ 6. Directional Mechanism Evaluator (Path-level regulatory polarity & contradictions)   │
+│ 7. Therapeutic Alignment & Opposition Engine (DoE / DATT target consensus)             │
+│ 8. Clinical Safety Agent (Trial outcome classification & adverse event profiling)      │
+│ 9. Deterministic Consensus & Rule Engine (Evidence-first scoring & status synthesis)  │
+│ 10. Investigation Playground Engine (Subgraph extraction & counterfactual simulation)  │
+│ 11. Scientific Audit Report & Exporters (Streamlit, REST API, PDF)                     │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
-
-- The **engineering layer** is deterministic: it resolves canonical IDs and retrieves structured data from open biomedical APIs.
-- The **reasoning layer** extracts claims from retrieved literature, traces and scores the biological evidence chain, detects contradictions, and applies a deterministic rule engine to produce a recommendation. The mechanistic score is computed from retrieved biological evidence — it is not an arbitrary LLM-generated number.
 
 ---
 
 ## 🌐 Data Sources (100% Free & Open)
 
-| Data Source | Domain / Information | Direct access |
+| Data Source | Domain / Coverage | Direct Access |
 | :--- | :--- | :--- |
-| **ChEMBL** | Drug bioactivities, targets, mechanisms | https://www.ebi.ac.uk/chembl/ |
-| **UniProt** | Human protein accessions, canonical mapping | https://www.uniprot.org/ |
-| **Reactome** | Human biological pathways & participants | https://reactome.org/ |
-| **Europe PMC** | Open-access literature & abstracts | https://europepmc.org/ |
-| **PubMed** | MEDLINE citations & abstracts | https://pubmed.ncbi.nlm.nih.gov/ |
-| **Open Targets** | Disease–gene associations & UniProt mapping | https://platform.opentargets.org/ |
-| **DisGeNET** | Gene–disease association scores | https://www.disgenet.org/ |
-| **ClinicalTrials.gov** | Human trial status & termination logs | https://clinicaltrials.gov/ |
-| **OpenAlex** | Open scholarly literature metadata | https://openalex.org/ |
-| **Semantic Scholar** | Citation-weighted literature evidence | https://www.semanticscholar.org/ |
+| **ChEMBL** | Drug bioactivities, primary targets, action mechanisms | [ebi.ac.uk/chembl](https://www.ebi.ac.uk/chembl/) |
+| **UniProt** | Human protein accessions, canonical sequence mapping | [uniprot.org](https://www.uniprot.org/) |
+| **Reactome** | Pathways, reaction events, molecular participant roles | [reactome.org](https://reactome.org/) |
+| **Open Targets** | Disease–gene associations, Direction-of-Effect (DoE) | [platform.opentargets.org](https://platform.opentargets.org/) |
+| **DisGeNET** | Gene–disease evidence scores, actionable trajectories | [disgenet.org](https://www.disgenet.org/) |
+| **PubMed** | MEDLINE citations, biomedical literature abstracts | [pubmed.ncbi.nlm.nih.gov](https://pubmed.ncbi.nlm.nih.gov/) |
+| **Europe PMC** | Open-access articles, full text, external links | [europepmc.org](https://europepmc.org/) |
+| **ClinicalTrials.gov** | Clinical trial protocols, status, `whyStopped` logs | [clinicaltrials.gov](https://clinicaltrials.gov/) |
+| **Semantic Scholar** | Citation-weighted scientific literature metadata | [semanticscholar.org](https://www.semanticscholar.org/) |
+| **OpenAlex** | Global scholarly bibliographic metadata | [openalex.org](https://openalex.org/) |
 
 ---
 
 ## 🚀 Quick Start
 
-### Installation
+### 1. Installation
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/sameekshaa19/cynthera.git
-   cd cynthera
-   ```
+```bash
+# Clone repository
+git clone https://github.com/sameekshaa19/cynthera.git
+cd cynthera
 
-2. **Set up a Python virtual environment**:
-   ```bash
-   python -m venv venv
-   # On Windows:
-   venv\Scripts\activate
-   # On Linux/macOS:
-   source venv/bin/activate
-   ```
+# Create and activate virtual environment
+python -m venv venv
+# On Windows:
+venv\Scripts\activate
+# On Linux/macOS:
+source venv/bin/activate
 
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+# Install dependencies
+pip install -r requirements.txt
+```
 
-4. **Configure Environment Variables**:
-   Copy `.env.example` to `.env` and set your preferred LLM provider:
-   ```bash
-   copy .env.example .env  # Windows
-   # or: cp .env.example .env
-   ```
+### 2. Environment Configuration
 
-   In `.env`:
-   ```env
-   LLM_PROVIDER=groq
-   GROQ_API_KEY=gsk_your_groq_api_key_here
-   GEMINI_API_KEY=your_gemini_api_key_here
-   ```
-   Optional keys (PubMed rate limits, DisGeNET, Semantic Scholar) are documented in `.env.example`.
+Copy `.env.example` to `.env`:
+```bash
+copy .env.example .env   # Windows
+# or: cp .env.example .env
+```
 
-### Running via CLI
+Set your preferred LLM provider in `.env`:
+```env
+# LLM Extraction Provider (Groq or Gemini)
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_your_groq_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
 
-Evaluate a drug-disease pair from the command line:
+# Optional: Higher rate-limit keys for PubMed / Semantic Scholar
+NCBI_API_KEY=your_ncbi_api_key_here
+SEMANTIC_SCHOLAR_API_KEY=your_semantic_scholar_key_here
+```
+> **Note:** CYNTHERA operates seamlessly with automatic rule-based extractors even if LLM keys are omitted.
 
+---
+
+## 💻 Usage
+
+### Command-Line Interface (CLI)
+
+Evaluate a drug-disease hypothesis from the command line:
 ```bash
 python main.py --drug "Sildenafil" --disease "Pulmonary Arterial Hypertension"
 ```
 
-Bypass the raw-response cache for fresh live API data:
+Bypass local cache for live real-time API retrieval:
 ```bash
 python main.py --drug "Duloxetine" --disease "Diabetic Neuropathy" --no-cache
 ```
 
-Save the full JSON report to file:
+Save the full structured scientific report to JSON:
 ```bash
-python main.py --drug "Thalidomide" --disease "Multiple Myeloma" --output report.json
+python main.py --drug "Testosterone" --disease "Prostate Cancer" --output report.json
 ```
 
-### Running the Web Interface
+### Interactive Streamlit Web Interface & Playground
 
+Launch the full web dashboard:
 ```bash
-streamlit run app.py
+streamlit run frontend/app.py
 ```
-Then open `http://localhost:8501`.
+Open `http://localhost:8501` in your browser.
 
-### Running the API Server
+- **Hypothesis Investigation:** Input drug and disease names to generate multi-hop biological chains, evidence cards, and direct source links.
+- **Investigation Playground:** Inspect dynamic causal subgraphs, filter by evidence polarity, and simulate "what-if" counterfactual scenarios (e.g., target inhibition/knockout effects).
+- **PDF Report Export:** Download publication-ready scientific audit reports with clickable source links.
 
+### FastAPI REST Service
+
+Launch the async REST API:
 ```bash
 python -m uvicorn backend.api.main:app --reload --port 8000
 ```
-Interactive Swagger docs at `http://localhost:8000/docs`.
+- **Interactive Swagger Documentation:** `http://localhost:8000/docs`
+- **Primary Analysis Endpoint:** `POST /api/v1/analyze`
+- **Playground Subgraph Endpoint:** `GET /playground/subgraph?investigation_id=...`
+- **Counterfactual Simulation:** `POST /playground/simulate`
+- **Health Check:** `GET /api/v1/health`
 
 ---
 
 ## 📊 Sample Output
 
-CYNTHERA reports the assessment as a research narrative: verdict → why → per-hop mechanism → evidence → sources → direct links.
+CYNTHERA formats assessments as a structured research narrative:
 
 ```text
 ==================================================
@@ -199,132 +238,128 @@ OVERALL ASSESSMENT
 --------------------------------------------------
 Mechanistic Plausibility : HIGH
 Score                    : 0.82
+Therapeutic Alignment    : SUPPORTS
 Evidence Status          : WELL SUPPORTED
+Recommendation Status    : PROMISING
 
 --------------------------------------------------
-WHY?
+WHY? (Per-Hop Mechanistic Chain)
 --------------------------------------------------
 
 1. Drug → Target
-   Sildenafil → PDE5
+   Sildenafil → PDE5A (Inhibitor)
    Evidence: ChEMBL, PubMed, Europe PMC
    [Open ChEMBL] [Open Paper] [Open DOI]
 
-2. Target → Pathway
-   PDE5 → cGMP signaling
-   Evidence: Reactome, PubMed
+2. Target → Reaction / Pathway
+   PDE5A → cGMP degradation → cGMP signaling pathway
+   Polarity: NEGATIVE (-) regulation of cGMP breakdown
+   Evidence: Reactome, UniProt
    [Open Reactome] [Open Paper]
 
-3. Pathway → Disease
-   cGMP signaling → pulmonary vasodilation → PAH
-   Evidence: Open Targets, PubMed
+3. Pathway → Disease Target / Mediator
+   cGMP accumulation → PKG activation → Pulmonary Vasodilation
+   Evidence: Open Targets, DisGeNET, PubMed
    [Open Open Targets] [Open Paper]
 
 --------------------------------------------------
-SUPPORTING EVIDENCE
+SUPPORTING EVIDENCE (Literature & Trials)
 --------------------------------------------------
-Paper 1
-  Title:  ...
-  Authors: ...
-  Year:   ...
-  PMID:   ...
-  DOI:    ...
-  [Open PubMed] [Open DOI] [Open Full Text / PDF]
+Paper 1: Phosphodiesterase-5 inhibitors in pulmonary arterial hypertension...
+  Authors: Ghofrani HA, et al. | Year: 2004 | PMID: 15329302
+  [Open PubMed] [Open Europe PMC] [Open DOI] [Open Full Text / PDF]
+
+Clinical Trial: SUPER-1 (NCT00078026)
+  Phase: Phase 3 | Status: Completed | Result: Efficacy demonstrated
+  [Open ClinicalTrials.gov]
 
 --------------------------------------------------
 CONTRADICTING / LIMITING EVIDENCE
 --------------------------------------------------
-Paper 3
-  [Open Source]
-
---------------------------------------------------
-CLINICAL EVIDENCE
---------------------------------------------------
-Trial:        NCT...
-Status:       Completed
-Why stopped:  ...
-  [Open ClinicalTrials.gov]
+None identified meeting opposition criteria.
 
 --------------------------------------------------
 SOURCES ACCESSED
 --------------------------------------------------
 ChEMBL · UniProt · Reactome · Open Targets · DisGeNET ·
-PubMed · Europe PMC · ClinicalTrials.gov
+PubMed · Europe PMC · ClinicalTrials.gov · Semantic Scholar
 ```
 
 ---
 
 ## 🔗 Evidence & Traceability Model
 
-Every important conclusion is traceable:
+Every conclusion is traceable from top-level recommendation down to primary source URLs:
 
 ```
-Conclusion
+Recommendation / Verdict
     ↓
-Claim ID
+Candidate Mechanism Assessment
     ↓
-Evidence IDs
+Claim ID (Polarity: SUPPORT / OPPOSE / NEUTRAL)
     ↓
-PMID / DOI / database identifier
+Evidence IDs (Applicability Gated)
     ↓
-Direct source URL
+Primary Database Identifier (PMID / DOI / ChEMBL ID / NCT ID)
+    ↓
+Direct Resource Access URL
 ```
 
-For literature sources, CYNTHERA exposes — whenever available — paper title, authors, year, PMID, DOI, and direct access buttons that distinguish:
+Direct access buttons distinguish:
+- `[Open PubMed]` — Official NCBI PubMed record
+- `[Open Europe PMC]` — Europe PMC repository entry
+- `[Open DOI]` — Publisher digital object identifier
+- `[Open ClinicalTrials.gov]` — NCT clinical trial registry entry
+- `[Open Full Text / PDF]` — Available **only** when a legal open-access full text/PDF is confirmed
 
-- `[Open PubMed]`
-- `[Open Europe PMC]`
-- `[Open DOI]`
-- `[Open Full Text / PDF]` — **only** when a full text/PDF is actually and legally publicly available. CYNTHERA never invents or fabricates PDF links; if a PDF is not public, the most authoritative accessible source is shown instead.
-
-When the same paper is retrieved from multiple sources (e.g., a PubMed PMID and a Europe PMC PMC ID), it is **deduplicated** into a single paper with multiple legitimate access options.
+When the same paper is retrieved across multiple aggregators, it is deduplicated into a single unified record with multiple legitimate access options.
 
 ---
 
 ## 🛑 Failure-State Handling
 
-A retrieval failure is **never** silently converted into a scientific conclusion. These states are distinct and are never conflated:
+Retrieval failures and database absences are **never** converted into scientific claims of biological implausibility:
 
 | State | Meaning |
 | :--- | :--- |
-| `DATA NOT FOUND` | The query succeeded but no data exists for this entity. |
-| `SOURCE UNAVAILABLE` | A source API failed or was unreachable (e.g., ChEMBL returned HTTP 500). |
-| `IDENTITY RESOLUTION FAILED` | The drug/disease name could not be resolved to a canonical database ID. |
-| `INSUFFICIENT EVIDENCE` | Not enough retrieved evidence to assess mechanism — not a claim of implausibility. |
-| `CONTRADICTORY EVIDENCE` | Retrieved evidence conflicts; the disagreement is shown. |
-| `MECHANISTICALLY UNSUPPORTED` | The evidence was retrieved but does not support the hypothesized mechanism. |
-| `MECHANISTICALLY PLAUSIBLE` | Retrieved evidence supports the mechanism. |
-
-**Example.** If ChEMBL is unavailable:
-
-- ❌ **Bad:** `Mechanistic score = 0 → LOW` ("not plausible").
-- ✅ **Good:** `Mechanistic assessment = INSUFFICIENT EVIDENCE`, reason = *target evidence could not be retrieved*.
+| `DATA NOT FOUND` | Query succeeded but no data exists for this biological entity. |
+| `SOURCE UNAVAILABLE` | Upstream API failed or timed out (e.g., ChEMBL HTTP 500). |
+| `IDENTITY RESOLUTION FAILED` | Drug or disease name could not be resolved to a canonical database ID. |
+| `INSUFFICIENT EVIDENCE` | Inadequate evidence to evaluate mechanism — not a claim of implausibility. |
+| `CONTRADICTORY EVIDENCE` | Retrieved evidence exhibits genuine biological or clinical conflict. |
+| `MECHANISTICALLY UNSUPPORTED`| Complete biological evidence was retrieved but does not connect the target to the disease. |
+| `MECHANISTICALLY PLAUSIBLE`  | Retrieved biological evidence confirms an interconnected multi-hop cascade. |
 
 ---
 
-## 📐 Scoring
+## 📐 Scoring & Decision Rules
 
-Scores are **deterministic, evidence-grounded, and explainable**. The system can explain exactly why a score was produced, from the retrieved biological evidence:
+Scores are **deterministic, evidence-grounded, and mathematically explainable**:
 
-- **Support Score (SS)** — strength of retrieved literature evidence.
-- **Mechanistic Score (MS)** — plausibility of the traced biological chain (Drug → Target → Pathway → Disease gene → Disease), built from target–affinity confidence, pathway relevance (disease-gene overlap), pathway participation, and per-hop confidence.
-- **Risk Score (RS)** — clinical safety signals from trials and adverse-event evidence.
-
-The score design optimizes **correctness over completeness over confidence**: if evidence is insufficient the system says `INSUFFICIENT EVIDENCE` rather than guessing, shows disagreement when sources conflict, and never inflates confidence by combining multiple weak paths into one strong conclusion.
+- **Support Score (SS)**: Quantitative strength of retrieved, applicability-gated literature claims.
+- **Mechanistic Score (MS)**: Plausibility of the biological cascade (`Drug → Target → Pathway → Disease Gene → Disease`), derived from target binding affinity, pathway participation, and disease-gene association scores.
+- **Risk Score (RS)**: Clinical safety signals extracted from adverse event profiles and clinical trial termination records (`whyStopped`).
+- **Therapeutic Alignment**: Evaluated across Direction-of-Effect (DoE) and Actionable Target Trajectories (DATTs) to yield `SUPPORTS`, `OPPOSES`, or `INSUFFICIENT`.
 
 ---
 
-## ✅ Validation
+## 🧪 Benchmark & Evaluation Framework
 
-The system is validated against known drug-disease relationships:
+CYNTHERA includes standardized evaluation datasets grounded in clinical literature and pharmacological databases ([`backend/evaluation/`](backend/evaluation/)):
 
-| Pair | Expectation |
-| :--- | :--- |
-| **Sildenafil → Pulmonary Arterial Hypertension** | Strong, evidence-gated mechanistic chain. |
-| **Metformin → Type 2 Diabetes** | Strong mechanistic evidence. |
-| **Negative / weak example** | Must **not** artificially produce HIGH. |
+### Benchmark Composition & Contradiction Controls
+The framework validates system performance across curated positive clinical indications, negative controls, and verified biological contradiction pairs:
+- *Testosterone $\rightarrow$ Prostate Cancer* (`OPPOSES` — androgen receptor agonist promotes prostate tumor proliferation)
+- *Digoxin $\rightarrow$ Wolff-Parkinson-White Syndrome* (`OPPOSES` — AV nodal blockade promotes lethal accessory pathway conduction)
+- *Salbutamol $\rightarrow$ Hypertrophic Cardiomyopathy* (`OPPOSES` — $\beta_2$ agonist exacerbates dynamic left ventricular outflow tract obstruction)
+- *Verapamil $\rightarrow$ Heart Failure with Reduced Ejection Fraction* (`OPPOSES` — negative inotrope worsens systolic failure)
+- *Finasteride $\rightarrow$ ER+ Breast Cancer* (`OPPOSES` — $5\alpha$-reductase inhibition increases substrate aromatization into estrogen)
 
-Edge cases exercised: invalid drug, invalid disease, missing API key, missing literature, duplicate papers across sources, paper without DOI, DOI without PDF, PubMed-only paper, Europe PMC-only paper, API failure, empty pathway participants, missing target mapping.
+### Evaluation Suites
+- **24-Case Benchmark Dataset** (`TEST` and `DEVELOPMENT` splits)
+- **30-Case Holdout Suite** (`backend/evaluation/run_30_case_holdout.py`)
+- **100-Case Frozen Evaluation** (`backend/evaluation/run_100_case_evaluation.py`):
+  Evaluates 3-class classification (`SUPPORT`, `OPPOSE`, `UNCERTAIN`), Accuracy, Macro F1, and Matthews Correlation Coefficient (MCC) with strict evaluation invariants.
 
 ---
 
@@ -332,37 +367,70 @@ Edge cases exercised: invalid drug, invalid disease, missing API key, missing li
 
 ```
 cynthera/
-├── backend/                 # Server-side application code
-│   ├── api/                 # FastAPI application layer & routes
-│   ├── core/                # Domain models, value objects, enums
-│   │   ├── domain/          #   Drug, Disease, Claim, Evidence, Hypothesis...
-│   │   ├── enums/           #   RecommendationStatus, EvidenceType, ...
-│   │   └── value_objects/   #   ERW, ProvenanceReference, CanonicalIdentifier
-│   ├── engineering/         # Deterministic retrieval infrastructure
-│   │   ├── orchestrator/    #   Master Orchestrator
-│   │   ├── identity/        #   Identity Resolution Service
-│   │   └── retrieval/       #   Pipeline & connectors (ChEMBL, Reactome, ...)
-│   ├── infrastructure/      # SQLite cache, logging, knowledge store
-│   ├── reasoning/           # Claim extraction, expert agents, multi-hop
-│   │                        # reasoner, rule engine, conflict resolution
-│   └── reporting/           # Report & PDF export
-├── frontend/               # Streamlit web app (`app.py`)
-├── tests/                  # Unit + integration test suite (`pytest`)
-├── main.py                 # CLI entry point
-├── .env.example            # Environment template
-└── requirements.txt        # Python dependencies
+├── backend/
+│   ├── api/                          # FastAPI REST application layer & routes
+│   │   ├── analyze_routes.py         #   Core /api/v1/analyze endpoints & DTO builders
+│   │   └── main.py                   #   FastAPI app instantiation & CORS setup
+│   ├── core/
+│   │   ├── domain/                   # Domain entities (CandidateMechanism, RetrievalPackage, Claim, Evidence...)
+│   │   ├── enums/                    # Typed enums (EvidencePolarity, RecommendationStatus, EvidenceType...)
+│   │   └── value_objects/            # Value objects (ERW, ProvenanceReference, CanonicalIdentifier...)
+│   ├── engineering/
+│   │   ├── identity/                 # Biological identifier resolution (ChEMBL, UniProt, MeSH, MONDO)
+│   │   ├── orchestrator/             # MasterOrchestrator deterministic retrieval coordinator
+│   │   └── retrieval/                # Async connectors (ChEMBL, Reactome, Open Targets, PubMed, ClinicalTrials...)
+│   ├── evaluation/                   # 100-case & 24-case benchmark datasets, evaluation runners, forensic audits
+│   ├── infrastructure/               # SQLite cache layer (`cynthera.db`), logging, persistence
+│   ├── playground/                   # Investigation Playground backend (subgraph extraction, scenario simulation)
+│   ├── reasoning/
+│   │   ├── agents/                   # Clinical safety agent, prior knowledge agent
+│   │   ├── conflict/                 # Advanced conflict resolver & contradiction detector
+│   │   ├── context/                  # Scientific context builder
+│   │   ├── directional/              # Evidence polarity classifier & therapeutic evidence applicability gates
+│   │   ├── extraction/               # LLM claim extraction agent with rule-based fallback
+│   │   ├── mechanistic/              # Evidence graph builder, multi-hop DFS pathfinder, mechanism validator
+│   │   ├── opposition/               # Semantic opposition qualification & propagation
+│   │   └── orchestrator/             # Reasoning orchestrator & deterministic decision rules
+│   └── reporting/                    # PDF report generator & export utilities
+├── frontend/
+│   ├── app.py                        # Streamlit main interactive dashboard
+│   └── playground_view.py            # Streamlit Investigation Playground view
+├── tests/
+│   └── unit/                         # 366 unit tests covering all modules & invariants
+├── data/                             # SQLite persistent cache database
+├── main.py                           # CLI entry point
+├── requirements.txt                  # Python dependencies
+├── .env.example                      # Environment configuration template
+└── README.md                         # Project documentation
 ```
 
 ---
 
 ## 🧪 Running Tests
 
+CYNTHERA maintains 366 unit tests verifying dataflow correctness, directional invariants, and edge cases:
+
 ```bash
+# Run all unit tests
 python -m pytest tests/unit/ -v
+
+# Run evidence polarity classification tests
+python -m pytest tests/unit/test_evidence_polarity.py -v
+
+# Run therapeutic opposition & propagation tests
+python -m pytest tests/unit/test_therapeutic_opposition.py -v
+
+# Run clinical trial safe parsing & attribution tests
+python -m pytest tests/unit/test_trial_attribution.py tests/unit/test_clinicaltrials_safe_fixes.py -v
+
+# Run playground & scenario simulation tests
+python -m pytest tests/unit/test_playground_and_risk_audit.py -v
 ```
 
 ---
 
 ## 📝 License & Disclaimer
 
-This project is built for research and educational purposes. Hypotheses and scores output by CYNTHERA should be evaluated by domain experts prior to clinical or experimental decisions.
+This project is licensed under the **MIT License**.
+
+**Disclaimer:** CYNTHERA is designed exclusively for scientific research, biological hypothesis generation, and educational analysis. It does not provide medical advice, clinical diagnoses, or treatment plans. All computational hypotheses, mechanistic chains, and scores must be evaluated and verified by qualified domain experts before any experimental or clinical application.
